@@ -95,7 +95,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   USE rad_pvland
   USE rad_split
   USE pvland_sfcphy_work
-  USE pvland_rad_cache, ONLY : vf_update_opt
+  USE pvland_nml, ONLY : vf_update_opt
 
   IMPLICIT NONE
 

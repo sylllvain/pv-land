@@ -1,0 +1,54 @@
+! PV-LAND parameters of the offline model: namelist &pvland.
+! The same namelist is read by ARPS (arps.input, sfcphy = 5).
+! Each parameter is described on its line; a parameter left out keeps
+! its default value (module pvland_nml in core/module_pvland.f90).
+! pv_park_opt and pv_park_i1..j2 (location of the park on the ARPS grid)
+! are not used offline: the single column is always in the PV park.
+!
+! Usage: ./pv_land.exe [forcing.csv [pvland.nml]]
+
+ &pvland
+   vf_update_opt  = 0,       ! View factors, radiosity LU factors and tilt-derived geometry: 0 = computed once at initialisation (fixed panels), 1 = recomputed every PV-LAND step (moving panels)
+
+   pv_park_opt    = 0,       ! PV park location: 0 = whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2
+     pv_park_i1   = 1,       ! First global x index (scalar point) of the PV park (pv_park_opt = 1)
+     pv_park_i2   = 99999,   ! Last global x index of the PV park, clipped to the domain (pv_park_opt = 1)
+     pv_park_j1   = 1,       ! First global y index (scalar point) of the PV park (pv_park_opt = 1)
+     pv_park_j2   = 99999,   ! Last global y index of the PV park, clipped to the domain (pv_park_opt = 1)
+
+   pv_L           = 3.23,    ! Panel length along the slope (m)
+   pv_a           = 3.4,     ! Inter-row spacing (m)
+   pv_beta_deg    = 24.0,    ! Panel tilt angle from the horizontal (deg)
+   pv_h_PV        = 1.9,     ! Height of the panel top edge above the ground (m)
+   pv_theta_0_deg = -3.0,    ! Park orientation angle used by the wind profile (deg)
+   pv_az_park     = 177.0,   ! Meteorological azimuth faced by the panel fronts (deg)
+
+   pv_z0_PV_back  = 0.0002,  ! Roughness length of the panel back surface (m)
+   pv_z0_PV_front = 0.0002,  ! Roughness length of the panel front surface (m)
+
+   pv_albedo_nat  = 0.22,    ! Albedo of the natural ground surface (-)
+   pv_albedo_PVf  = 0.11,    ! Albedo of the panel front (-)
+   pv_albedo_PVb  = 0.11,    ! Albedo of the panel back (-)
+   pv_emiss_nat   = 0.98,    ! Emissivity of the natural ground surface (-)
+   pv_emiss_PVf   = 0.79,    ! Emissivity of the panel front (-)
+   pv_emiss_PVb   = 0.80,    ! Emissivity of the panel back (-)
+
+   pv_l_PVb_can   = 0.015,   ! Interface length panel back -> canopy air for the neutral exchange coefficient (m)
+   pv_l_PVf_PVa   = 0.015,   ! Interface length panel front -> air above the panels for the neutral exchange coefficient (m)
+
+   pv_delta_PVf   = 3.2e-3,  ! Equivalent thickness of the front node of the PV module (m)
+   pv_delta_cell  = 0.5e-3,  ! Equivalent thickness of the cell node (m)
+   pv_delta_PVb   = 0.5e-3,  ! Equivalent thickness of the back node (m)
+   pv_rho_cp_PVf  = 1.6e6,   ! Volumetric heat capacity of the front node (J/m3/K)
+   pv_rho_cp_cell = 1.6e6,   ! Volumetric heat capacity of the cell node (J/m3/K)
+   pv_rho_cp_PVb  = 1.8e6,   ! Volumetric heat capacity of the back node (J/m3/K)
+   pv_k_glass     = 1.8,     ! Thermal conductivity of the glass (W/m/K)
+   pv_k_EVA       = 0.33,    ! Thermal conductivity of the EVA (W/m/K)
+   pv_k_backsheet = 0.20,    ! Thermal conductivity of the backsheet (W/m/K)
+   pv_delta_glass = 2.2e-3,  ! Thickness of the glass sub-layer (m)
+   pv_delta_EVA_top = 1.0e-3, ! Thickness of the top EVA sub-layer (m)
+   pv_delta_EVA_bot = 0.5e-3, ! Thickness of the bottom EVA sub-layer (m)
+   pv_delta_backsheet = 0.5e-3, ! Thickness of the backsheet sub-layer (m)
+   pv_eta_STC     = 0.18,    ! PV efficiency at standard test conditions (25 C, 1000 W/m2) (-)
+   pv_gamma_PV    = 0.0045,  ! Temperature coefficient of the PV efficiency (1/K)
+ /

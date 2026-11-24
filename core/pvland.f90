@@ -42,6 +42,7 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   USE module_pvland_out
   USE rad_pvland
   USE pvland_rad_cache
+  USE pvland_nml
   
   IMPLICIT NONE
 
@@ -118,49 +119,59 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   ! whole domain in the offline model.  [SYLVAIN]
   CALL pvland_park_map(nx,ny,pv_park,tem1)
   
-  ! ====== PV park geometry ======
-  L = 3.23           ! Panel width (m)
-  a = 3.4            ! Inter-row spacing (m)
-  beta_deg = 24.0    ! Tilt angle (degrees)
-  h_PV = 1.9         ! Panel height (m)
-  theta_0_deg = -3.0 ! Park orientation angle (degrees)
-  AZ_PARK  = 177.0   ! azimut meteo avant du parc [deg]
+  ! ====== PV park parameters: namelist &pvland (module pvland_nml) ======
+  ! Read by initpara (ARPS, arps.input) or by the offline main program
+  ! (pvland.nml) before this call.  [SYLVAIN]
 
-  ! ====== Surface parameters ======
-  !z0_nat = 0.05        ! Natural surface roughness (m)
-  z0_PV_back = 0.0002   ! PV panel back roughness (m)
-  z0_PV_front = 0.0002  ! PV panel front roughness (m)
+  ! Park geometry
+  L = pv_L                 ! Panel length along the slope (m)
+  a = pv_a                 ! Inter-row spacing (m)
+  beta_deg = pv_beta_deg   ! Tilt angle (degrees)
+  h_PV = pv_h_PV           ! Height of the panel top edge (m)
+  theta_0_deg = pv_theta_0_deg ! Park orientation angle (degrees)
+  AZ_PARK  = pv_az_park    ! Meteorological azimuth faced by the panel fronts (deg)
+
+  ! Surface parameters
+  z0_PV_back = pv_z0_PV_back    ! PV panel back roughness (m)
+  z0_PV_front = pv_z0_PV_front  ! PV panel front roughness (m)
   
   ! Optical properties
-  albedo_nat = 0.22  ! Natural surface albedo
-  albedo_PVf = 0.11  ! PV front albedo
-  albedo_PVb = 0.11  ! PV back albedo
-  emiss_nat = 0.98   ! Natural surface emissivity
-  emiss_PVf = 0.79   ! PV front emissivity
-  emiss_PVb = 0.80   ! PV back emissivity
+  albedo_nat = pv_albedo_nat  ! Natural surface albedo
+  albedo_PVf = pv_albedo_PVf  ! PV front albedo
+  albedo_PVb = pv_albedo_PVb  ! PV back albedo
+  emiss_nat = pv_emiss_nat    ! Natural surface emissivity
+  emiss_PVf = pv_emiss_PVf    ! PV front emissivity
+  emiss_PVb = pv_emiss_PVb    ! PV back emissivity
   
   ! Geometry: tilt and orientation. The quantities derived from the tilt
   ! (h_clear, width, lambda_f_park, z_can, z_PVa, view factors) are
   ! computed in pvland_geometry, called below.
-  beta = beta_deg * pi / 180.0
-  theta_0 = theta_0_deg * pi / 180.0
+  ! written as deg*(pi/180.) to give the same rounding as the former
+  ! constant values folded by the compiler (24*pi/180 differs by 1 ulp)
+  beta = beta_deg * (pi / 180.0)
+  theta_0 = theta_0_deg * (pi / 180.0)
 
   ! Interface lengths for neutral drag coefficient calculations
   ! (l_nat_can = z_can is set in pvland_geometry)
-  l_PVb_can  = 0.015        ! Eq. 6.7-6.9: PV back to canopy air
-  l_PVf_PVa  = 0.015         ! Eq. 6.11-6.13: PV front to air above PV
+  l_PVb_can  = pv_l_PVb_can   ! Eq. 6.7-6.9: PV back to canopy air
+  l_PVf_PVa  = pv_l_PVf_PVa   ! Eq. 6.11-6.13: PV front to air above PV
   
-  ! Get PV thermal parameters
-  DO j=1,ny
-  DO i=1,nx
-  CALL pv_thermal_params(delta_PVf(i,j), delta_cell(i,j), delta_PVb(i,j), &
-                        rho_cp_PVf(i,j), rho_cp_cell(i,j), rho_cp_PVb(i,j), &
-                        k_glass(i,j), k_EVA(i,j), k_backsheet(i,j), &
-                        delta_glass(i,j), delta_EVA_top(i,j), &
-                        delta_EVA_bot(i,j), delta_backsheet(i,j), &
-                        eta_STC(i,j), gamma_PV(i,j))
-  ENDDO
-  ENDDO
+  ! PV module thermal and electrical parameters
+  delta_PVf       = pv_delta_PVf
+  delta_cell      = pv_delta_cell
+  delta_PVb       = pv_delta_PVb
+  rho_cp_PVf      = pv_rho_cp_PVf
+  rho_cp_cell     = pv_rho_cp_cell
+  rho_cp_PVb      = pv_rho_cp_PVb
+  k_glass         = pv_k_glass
+  k_EVA           = pv_k_EVA
+  k_backsheet     = pv_k_backsheet
+  delta_glass     = pv_delta_glass
+  delta_EVA_top   = pv_delta_EVA_top
+  delta_EVA_bot   = pv_delta_EVA_bot
+  delta_backsheet = pv_delta_backsheet
+  eta_STC         = pv_eta_STC
+  gamma_PV        = pv_gamma_PV
 
   ! ====== Radiosity model: temperature-independent quantities ======
   ! View factors and LU factorisations of the SW and LW radiosity
@@ -169,7 +180,6 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   !   vf_update_opt = 1 : recomputed at every PV-LAND time step
   !                       (pvland_sfcphy), for moving panels, e.g. sun
   !                       tracking: beta may then change in time.  [SYLVAIN]
-  vf_update_opt = 0
 
   ALLOCATE(F_pv(nsurf_pv,nsurf_pv,nx,ny), Fsky_pv(nsurf_pv,nx,ny))
   ALLOCATE(LU_SW_pv(nsurf_pv,nsurf_pv,nx,ny), LU_LW_pv(nsurf_pv,nsurf_pv,nx,ny))

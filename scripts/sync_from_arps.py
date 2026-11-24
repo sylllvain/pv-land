@@ -30,7 +30,6 @@ CORE_FILES = [
     "pvland_solar_radiation.f90",
     "pvland_radiosity_SW.f90",
     "pvland_radiosity_LW.f90",
-    "pvland_pv_thermal.f90",
 ]
 ARPS_LIB_FILES = [
     "soilebm3d.f90",

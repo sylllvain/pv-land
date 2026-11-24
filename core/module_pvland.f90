@@ -270,7 +270,7 @@ end module rad_pvland
 !
 ! Quantities of the 8-surface radiosity model that do not depend on the
 ! surface temperatures, computed once (INIT_PVLAND, or every time step
-! when vf_update_opt = 1) or once per change of the solar forcing
+! when vf_update_opt = 1, see module pvland_nml) or once per change of the solar forcing
 ! (compute_all_forcings), instead of at every call.
 ! [SYLVAIN]
 
@@ -279,9 +279,7 @@ module pvland_rad_cache
 
   INTEGER, PARAMETER :: nsurf_pv = 8      ! number of radiating surfaces
 
-  ! 0: view factors and LU factorisations computed once (INIT_PVLAND),
-  ! 1: recomputed at every PV-LAND time step (moving panels, beta(t))
-  INTEGER :: vf_update_opt = 0
+  ! vf_update_opt (when to compute the view factors): see module pvland_nml
 
   ! Geometry only (computed in INIT_PVLAND)
   REAL,    ALLOCATABLE :: F_pv(:,:,:,:)     ! view factors   (8,8,nx,ny)
@@ -297,3 +295,88 @@ module pvland_rad_cache
   REAL,    ALLOCATABLE :: J_SW_pv(:,:,:), G_SW_pv(:,:,:), q_SW_pv(:,:,:)   ! (8,nx,ny)
 
 end module pvland_rad_cache
+
+!########################################################################
+!########################################################################
+!#########                                                      #########
+!#########             MODULE pvland_nml                        #########
+!#########                                                      #########
+!########################################################################
+!########################################################################
+!
+! Input parameters of PV-LAND, read from the namelist &pvland:
+!   ARPS:    in arps.input (initpara, only when sfcphy = 5), after &soil_ebm
+!   offline: in the file pvland.nml (pvland_offline_main)
+! The values below are the defaults, used for any parameter missing from
+! the namelist. INIT_PVLAND copies them into the (nx,ny) arrays of
+! module_pvland_in.  [SYLVAIN]
+
+MODULE pvland_nml
+
+  IMPLICIT NONE
+
+  ! ---- Options ----
+  INTEGER :: vf_update_opt = 0      ! View factors, sky view factors, radiosity LU factors and tilt-derived geometry: 0 = computed once at initialisation (fixed panels), 1 = recomputed at every PV-LAND time step (moving panels)
+
+  ! ---- Location of the PV park (ARPS only; the offline column is always in the park) ----
+  INTEGER :: pv_park_opt = 0        ! 0 = PV park over the whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2
+  INTEGER :: pv_park_i1 = 1         ! First global x index (scalar point) of the PV park (pv_park_opt = 1)
+  INTEGER :: pv_park_i2 = 99999     ! Last global x index of the PV park, clipped to the domain (pv_park_opt = 1)
+  INTEGER :: pv_park_j1 = 1         ! First global y index (scalar point) of the PV park (pv_park_opt = 1)
+  INTEGER :: pv_park_j2 = 99999     ! Last global y index of the PV park, clipped to the domain (pv_park_opt = 1)
+
+  ! ---- Park geometry ----
+  REAL :: pv_L = 3.23               ! Panel length along the slope (m)
+  REAL :: pv_a = 3.4                ! Inter-row spacing (m)
+  REAL :: pv_beta_deg = 24.0        ! Panel tilt angle from the horizontal (deg)
+  REAL :: pv_h_PV = 1.9             ! Height of the panel top edge above the ground (m)
+  REAL :: pv_theta_0_deg = -3.0     ! Park orientation angle used by the wind profile (deg)
+  REAL :: pv_az_park = 177.0        ! Meteorological azimuth faced by the panel fronts (deg)
+
+  ! ---- Roughness lengths ----
+  REAL :: pv_z0_PV_back = 0.0002    ! Roughness length of the panel back surface (m)
+  REAL :: pv_z0_PV_front = 0.0002   ! Roughness length of the panel front surface (m)
+
+  ! ---- Radiative properties ----
+  REAL :: pv_albedo_nat = 0.22      ! Albedo of the natural ground surface (-)
+  REAL :: pv_albedo_PVf = 0.11      ! Albedo of the panel front (-)
+  REAL :: pv_albedo_PVb = 0.11      ! Albedo of the panel back (-)
+  REAL :: pv_emiss_nat = 0.98       ! Emissivity of the natural ground surface (-)
+  REAL :: pv_emiss_PVf = 0.79       ! Emissivity of the panel front (-)
+  REAL :: pv_emiss_PVb = 0.80       ! Emissivity of the panel back (-)
+
+  ! ---- Interface lengths of the neutral exchange coefficients ----
+  REAL :: pv_l_PVb_can = 0.015      ! Panel back to canopy air (m), Eq. 6.7-6.9
+  REAL :: pv_l_PVf_PVa = 0.015      ! Panel front to air above the panels (m), Eq. 6.11-6.13
+
+  ! ---- PV module, 3-node thermal model (Table 3, Khyani et al. 2023) ----
+  REAL :: pv_delta_PVf = 3.2e-3     ! Equivalent thickness of the front node (m)
+  REAL :: pv_delta_cell = 0.5e-3    ! Equivalent thickness of the cell node (m)
+  REAL :: pv_delta_PVb = 0.5e-3     ! Equivalent thickness of the back node (m)
+  REAL :: pv_rho_cp_PVf = 1.6e6     ! Volumetric heat capacity of the front node (J/m3/K)
+  REAL :: pv_rho_cp_cell = 1.6e6    ! Volumetric heat capacity of the cell node (J/m3/K)
+  REAL :: pv_rho_cp_PVb = 1.8e6     ! Volumetric heat capacity of the back node (J/m3/K)
+  REAL :: pv_k_glass = 1.8          ! Thermal conductivity of the glass (W/m/K)
+  REAL :: pv_k_EVA = 0.33           ! Thermal conductivity of the EVA (W/m/K)
+  REAL :: pv_k_backsheet = 0.20     ! Thermal conductivity of the backsheet (W/m/K)
+  REAL :: pv_delta_glass = 2.2e-3   ! Thickness of the glass sub-layer (m)
+  REAL :: pv_delta_EVA_top = 1.0e-3 ! Thickness of the top EVA sub-layer (m)
+  REAL :: pv_delta_EVA_bot = 0.5e-3 ! Thickness of the bottom EVA sub-layer (m)
+  REAL :: pv_delta_backsheet = 0.5e-3 ! Thickness of the backsheet sub-layer (m)
+  REAL :: pv_eta_STC = 0.18         ! PV efficiency at standard test conditions (25 C, 1000 W/m2) (-)
+  REAL :: pv_gamma_PV = 0.0045      ! Temperature coefficient of the PV efficiency (1/K)
+
+  NAMELIST /pvland/ vf_update_opt,                                       &
+           pv_park_opt, pv_park_i1, pv_park_i2, pv_park_j1, pv_park_j2,  &
+           pv_L, pv_a, pv_beta_deg, pv_h_PV, pv_theta_0_deg, pv_az_park, &
+           pv_z0_PV_back, pv_z0_PV_front,                                &
+           pv_albedo_nat, pv_albedo_PVf, pv_albedo_PVb,                  &
+           pv_emiss_nat, pv_emiss_PVf, pv_emiss_PVb,                     &
+           pv_l_PVb_can, pv_l_PVf_PVa,                                   &
+           pv_delta_PVf, pv_delta_cell, pv_delta_PVb,                    &
+           pv_rho_cp_PVf, pv_rho_cp_cell, pv_rho_cp_PVb,                 &
+           pv_k_glass, pv_k_EVA, pv_k_backsheet,                         &
+           pv_delta_glass, pv_delta_EVA_top, pv_delta_EVA_bot,           &
+           pv_delta_backsheet, pv_eta_STC, pv_gamma_PV
+
+END MODULE pvland_nml

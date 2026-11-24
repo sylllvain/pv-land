@@ -20,8 +20,10 @@
 !  pvland_sfcphy is called with meas_opt = 1: diffuse SW, sun angles in
 !  the park frame and Obukhov length are taken from the measurements.
 !
-!  Usage:  ./pv_land.exe [forcing.csv]
+!  Usage:  ./pv_land.exe [forcing.csv [pvland.nml]]
 !          default forcing file: recorded_data_adjusted_daily_summer_2025.csv
+!          default PV-LAND parameter file: pvland.nml (namelist &pvland,
+!          the same as in ARPS arps.input; pv_park_* are not used offline)
 !
 !  Grid: nx = ny = 2 (ARPS loops run from 1 to nx-1, so a single
 !  column (1,1) is computed), nz = 3 (level 2 = reference level).
@@ -32,6 +34,7 @@ PROGRAM pvland_offline_main
 
   USE module_pvland_in,  ONLY : h_PV
   USE module_pvland_out
+  USE pvland_nml,        ONLY : pvland      ! namelist &pvland (PV park parameters)
   USE pvland_sfcphy_work, ONLY : uref_diag => uref,                    &
                                  cdh_can_diag => cdh_can,              &
                                  cdh_PVa_diag => cdh_PVa
@@ -68,6 +71,7 @@ PROGRAM pvland_offline_main
   REAL :: frac
   CHARACTER(LEN=500) :: line
   CHARACTER(LEN=256) :: forcing_file    ! forcing CSV (1st command-line argument)
+  CHARACTER(LEN=256) :: nml_file        ! PV-LAND namelist file (2nd command-line argument)
 
   ! ====== CSV input arrays ======
   REAL, ALLOCATABLE :: uref_input(:), udir_input(:)
@@ -190,6 +194,23 @@ PROGRAM pvland_offline_main
 
   ! Arrays allocated by arps.f90 in ARPS
   ALLOCATE(T_PVf(nx,ny), T_cell(nx,ny), T_PVb(nx,ny), ptsfc_eff(nx,ny), qvsfc_eff(nx,ny))
+
+  ! PV-LAND parameters: namelist &pvland (same as in ARPS arps.input)
+  nml_file = 'pvland.nml'
+  IF (COMMAND_ARGUMENT_COUNT() >= 2) CALL GET_COMMAND_ARGUMENT(2, nml_file)
+  OPEN(UNIT=11, FILE=TRIM(nml_file), STATUS='old', IOSTAT=ios)
+  IF (ios /= 0) THEN
+    WRITE(*,*) 'ERROR: PV-LAND parameter file not found: ', TRIM(nml_file)
+    STOP 1
+  END IF
+  READ(11, NML=pvland, IOSTAT=ios)
+  IF (ios /= 0) THEN
+    WRITE(*,*) 'ERROR reading namelist &pvland in ', TRIM(nml_file), ' (iostat =', ios, ')'
+    STOP 1
+  END IF
+  CLOSE(11)
+  WRITE(*,*) 'PV-LAND parameters read from ', TRIM(nml_file), ':'
+  WRITE(*,NML=pvland)
 
   CALL init_pvland(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc(:,:,1),tsoil(:,:,1,1),tem1)
 

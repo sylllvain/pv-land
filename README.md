@@ -29,7 +29,8 @@ d'Obukhov mesurés**.
 make              # compile pv_land.exe (ifx -O2)
 make run          # forçage complet (été 2025, 2303 pas de 30 min, ~2 min)
 make run-short    # 5 premiers jours (recorded_data_short_5days.csv, ~15 s)
-./pv_land.exe mon_forcage.csv
+./pv_land.exe mon_forcage.csv                 # paramètres lus dans pvland.nml
+./pv_land.exe mon_forcage.csv mes_params.nml  # autre fichier de paramètres
 ```
 
 Sorties : `pv_land_output.csv` (flux modélisés et mesurés, températures) et
@@ -44,12 +45,24 @@ Sorties : `pv_land_output.csv` (flux modélisés et mesurés, températures) et
 On peut aussi modifier un fichier de `core/` ici pour tester, puis le recopier
 dans ARPS ; `make check-arps` signale tout fichier qui diffère d'ARPS.
 
-Les paramètres du parc (géométrie, propriétés optiques) sont dans
-`INIT_PVLAND` (`core/pvland.f90`), comme dans ARPS. Les paramètres du site
-(sol, végétation, état initial) sont en tête de `offline/pvland_offline_main.f90`.
+## Paramètres : namelist `&pvland`
 
-`vf_update_opt` (dans `INIT_PVLAND`) choisit quand recalculer tout ce qui
-dépend de l'inclinaison β des panneaux (facteurs de vue, F_sky, factorisations
-des matrices de radiosité, h_clear, z_can, z_PVa…), via `pvland_geometry` :
-`0` = une seule fois à l'initialisation (panneaux fixes), `1` = à chaque pas de
-temps (panneaux mobiles, suivi du soleil ; la loi de suivi β(t) reste à écrire).
+Les paramètres du parc sont lus dans la namelist `&pvland` : fichier
+`pvland.nml` pour l'offline, bloc `&pvland` de `arps.input` (après `&soil_ebm`)
+pour ARPS. C'est la même namelist dans les deux modèles (module `pvland_nml`
+de `core/module_pvland.f90`, qui donne aussi les valeurs par défaut).
+Chaque paramètre y est décrit sur sa ligne :
+
+- `vf_update_opt` : quand recalculer tout ce qui dépend de l'inclinaison β
+  (facteurs de vue, F_sky, factorisations des matrices de radiosité, h_clear,
+  z_can, z_PVa…) : `0` = une seule fois à l'initialisation (panneaux fixes),
+  `1` = à chaque pas de temps (panneaux mobiles ; la loi de suivi β(t) reste
+  à écrire) ;
+- `pv_park_opt`, `pv_park_i1..j2` : emplacement du parc sur la grille ARPS
+  (non utilisés en offline) ;
+- géométrie (`pv_L`, `pv_a`, `pv_beta_deg`, `pv_h_PV`, `pv_theta_0_deg`,
+  `pv_az_park`), rugosités, albédos et émissivités, longueurs d'interface,
+  paramètres thermiques et électriques du module PV.
+
+Les paramètres du site (sol, végétation, état initial, `dtsfc`) restent en tête
+de `offline/pvland_offline_main.f90`.

@@ -55,7 +55,6 @@ CORE_SRC = module_pvland.f90 \
            pvland_solar_radiation.f90 \
            pvland_radiosity_SW.f90 \
            pvland_radiosity_LW.f90 \
-           pvland_pv_thermal.f90 \
            pvland.f90 \
            pvland_driver.f90
 LIB_SRC  = sfcphy3d_extract.f90 \
