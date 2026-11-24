@@ -105,10 +105,8 @@
 
   REAL :: rsmin(14)          ! Minimum of surface resistance
   DATA rsmin/ 999.0, 500.0,  40.0,  80.0,  80.0, 100.0, 150.0,          &
-             100.0, 999.0,  40.0,   5.0,  80.0, 300.0, 1.0E-30/
-  !DATA rsmin/ 999.0, 500.0,  83.0,  80.0,  80.0, 100.0, 150.0,          &
-  !            100.0, 999.0,  40.0,   5.0,  80.0, 300.0, 1.0E-30/
-              
+              100.0, 999.0,  40.0,   5.0,  80.0, 300.0, 1.0E-30/
+
   REAL :: alpha(7)    ! Polynomial fit used for estimating des/dT
   DATA alpha/ 610.7799961, 44.36518521,1.428945805,            &
            2.650648471E-2, 3.031240396E-4,2.034080948E-6,      &
@@ -145,7 +143,7 @@
                              ! above cloud: dirfc = dirf (not for sfc.)
   DATA dirfc/1.6666667/   ! below & within cloud: dirfc = 5/3
 
-  REAL :: d1              ! Top layer depth of soil column: 10 cm
+  REAL :: d1                 ! Top layer depth of soil column: 10 cm
   DATA d1/ 0.10/          ! Chaning d1 requires changing C1sat. The
                           ! latter is propotional to the inverse of d1
 

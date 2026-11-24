@@ -464,7 +464,8 @@ subroutine expint_E1(x, res)
   else
      ! Continued fraction (modified Lentz), convergent for all x >= 1.
      block
-       real, parameter :: eps = 1.0e-12, fpmin = 1.0e-300
+       !real, parameter :: eps = 1.0e-12, fpmin = 1.0e-300
+       real, parameter :: eps = 1.0e-12, fpmin = 1.0e-20 !modif sylvain
        real :: b, c, dd, h, an, del
        integer :: i
        b  = x + 1.0
@@ -845,3 +846,191 @@ subroutine U_within(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, U)
 
   U = (1.0 - w) * U_h * log_part + w * U_h * exp_part
 end subroutine U_within
+
+!============================================================
+! SUBROUTINE: Rib_to_Lobk
+!
+! Purpose:
+! --------
+! Calculate L_obk.
+!
+! Inputs:
+! -------
+! z         : height above ground [m]
+! theta     : wind direction [rad]
+! lambda_f  : frontal density [-]
+! h_PV      : canopy height [m]
+! beta_deg  : panel tilt angle [deg]
+! Lo        : Obukhov length [m] (<0 unstable, >0 stable;
+!             0 or |Lo| very large -> neutral)
+!
+! Output:
+! -------
+! U         : dimensionless velocity [-]
+!
+! Note:
+! -----
+! Stability enters only through the canopy-top velocity U+(h_PV),
+! computed with the stability-corrected above-canopy profile. The
+! log-shape and exponential parts within the canopy are kept in
+! their neutral form, consistent with the approach of applying the
+! MOST correction above the canopy only (Harman & Finnigan 2007).
+!============================================================
+subroutine Rib_to_Lobk(nx,ny,nz,ibgn,iend,jbgn,jend,zp,roufns,wspd,ptsfc,       &
+		       pt1, Lo)
+		       
+	  IMPLICIT NONE
+
+	  INTEGER :: nx,ny,nz          ! The number grid points in 3 directions
+
+	  INTEGER :: ibgn              ! i-index where evaluation begins.
+	  INTEGER :: iend              ! i-index where evaluation ends.
+	  INTEGER :: jbgn              ! j-index where evaluation begins.
+	  INTEGER :: jend              ! j-index where evaluation ends.
+
+	  REAL :: zp    (nx,ny,nz)     ! The physical height coordinate
+		                           ! defined at w-point of staggered grid.
+	  REAL :: roufns(nx,ny)        ! Surface roughness length
+
+	  REAL :: wspd  (nx,ny)        ! Surface wind speed (m/s)
+
+	  REAL :: ptsfc(nx,ny)         ! Potential temperature at the ground
+		                           ! level (K)
+	  REAL :: pt1   (nx,ny)        ! Potential temperature at the
+		                           ! 1st scalar
+		                           ! point above ground level, (K)
+	  REAL :: Lo   (nx,ny)         ! Obukhov length scale (m)
+
+	!
+	!-----------------------------------------------------------------------
+	!
+	!  Misc. local variables:
+	!
+	!-----------------------------------------------------------------------
+	!
+	  INTEGER :: i, j
+
+	  REAL :: z1                   ! The height of 1st scalar point above
+		                           ! ground level (m)
+	  REAL :: dz0                  ! z1-roufns, where roufns is defined as
+		                           ! surface roughness length
+	  REAL :: bulkri               ! Bulk Richardson number
+
+	  REAL :: stabp                ! Monin-Obukhov STABility Parameter
+		                           ! (zeta)
+	  REAL :: x1,x0,psim           ! Intermediate parameters needed
+	  REAL :: z1drou,qb3pb2
+	  REAL :: c7,c8
+	  REAL :: sb,qb,pb,thetab,tb   ! During  computations
+	  REAL :: a,b,c,d
+	  REAL :: tempan,sqrtqb
+
+	  REAL :: zt                   ! Thermal roughness length
+	  REAL :: dzt
+	  REAL :: ztdrou
+
+	  REAL :: z1droup, ztdroup
+
+	  REAL, PARAMETER :: eps_tol = 1.0d-6
+	  
+	!
+	!-----------------------------------------------------------------------
+	!
+	!  Include files:
+	!
+	!-----------------------------------------------------------------------
+	!
+	  INCLUDE 'phycst.inc'
+	  INCLUDE 'globcst.inc'
+	  INCLUDE 'sfcphycst.inc'
+	  
+	!
+	!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+	!
+	!  Beginning of executable code...
+	!
+	!@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+	!
+	!
+	!-----------------------------------------------------------------------
+	!
+	!  Following Byun (1990).
+	!
+	!-----------------------------------------------------------------------
+	!
+	  DO j=jbgn,jend
+		DO i=ibgn,iend
+
+		  z1  = 0.5d0*(zp(i,j,3)-zp(i,j,2))
+		  z1  = MIN(z1,z1limit)
+
+		  zt = ztz0*roufns(i,j)           ! Original Zt formulation
+
+		  dzt = z1-zt
+		  ztdrou = z1/zt
+		  ztdroup = (z1+zt)/zt
+
+		  dz0 = z1-roufns(i,j)
+		  z1drou = z1/roufns(i,j)
+		  z1droup = (z1+roufns(i,j))/roufns(i,j)
+
+		  bulkri = (g/ptsfc(i,j))*(pt1(i,j)-ptsfc(i,j))*dz0/                &
+		           (wspd(i,j)*wspd(i,j))
+
+		  IF (bulkri <= 0.0d0) THEN
+	!
+	!-----------------------------------------------------------------------
+	!
+	!  Unstable case: See equations (28)-(34) in Byun (1990).
+	!
+	!-----------------------------------------------------------------------
+	!
+		    bulkri = MAX (bulkri,-10.0d0)
+
+		    sb =bulkri/prantl0l
+
+		    qb=oned9*(c1l+c2l*sb*sb)
+		    pb=oned54*(c3l+c4l*sb*sb)
+
+		    qb3pb2=qb**3-pb*pb
+		    c7 = (z1*dzt*LOG(z1drou)*LOG(z1drou))/(dz0*dz0*LOG(ztdroup))
+
+		    IF( qb3pb2 >= 0.0d0 ) THEN
+
+		      sqrtqb = SQRT(qb)
+		      tempan = MAX( -1.0d0, MIN( 1.0d0, pb/(sqrtqb**3) ) )
+
+		      thetab=ACOS(tempan)
+		      stabp =c7*(-2.0d0*sqrtqb*COS(thetab/3.0d0)+c5l)
+
+		    ELSE
+
+		      tb    =(SQRT(-qb3pb2)+ABS(pb))**oned3
+		      stabp =c7*(-(tb+qb/tb)+c5l)
+
+		    END IF
+		    
+		  ELSE
+	!
+	!-----------------------------------------------------------------------
+	!
+	!  Stable case: See equation (19) in Byun (1990).
+	!
+	!-----------------------------------------------------------------------
+	!
+		  sb =bulkri/prantl0l
+
+          c7 = (z1*dzt*LOG(z1drou)*LOG(z1drou))/(dz0*dz0*LOG(ztdroup))  
+          stabp = c7/(2.*betahl*(betaml*bulkri-1.)) * &
+               (-(2.*betahl*bulkri-1.)+sqrt(1.+4.*(betahl-betaml)*sb))
+          
+		  END IF
+
+		  Lo(i,j) = z1/stabp
+
+		END DO
+	  END DO
+
+	  RETURN
+		    
+end subroutine Rib_to_Lobk

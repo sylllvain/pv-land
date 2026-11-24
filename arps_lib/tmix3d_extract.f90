@@ -1,4 +1,6 @@
-
+!==== Extracted from ARPS tmix3d.f90 : SUBROUTINE tridiag2 (do not edit) ====
+!
+!
 !##################################################################
 !##################################################################
 !######                                                      ######
@@ -112,5 +114,4 @@ SUBROUTINE tridiag2(nx,ny,nz,ibgn,iend,jbgn,jend,                       &
 
   RETURN
 END SUBROUTINE tridiag2
-
 

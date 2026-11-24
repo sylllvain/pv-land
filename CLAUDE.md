@@ -4,50 +4,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-PV-LAND: a Fortran 90 land-surface model for a ground-mounted photovoltaic park. It runs offline (not coupled to ARPS) and is forced by measured meteorological data. It computes the energy balance of the natural ground surface, the soil, and the PV panels (front glass / cell / back), and compares modelled fluxes (H, LE, Rn, G) with measurements. A large part of the soil/surface physics is reused from the ARPS model (`soilebm3d.f90`, `dragcoef_sfcflx.f90`, `thermolib3d.f90`, `tridiag2.f90`, and the `*.inc` common-block files). The user writes in French.
+PV-LAND offline: a Fortran 90 land-surface model for a ground-mounted photovoltaic park, forced by measured meteorological data. It computes the energy balance of the natural ground surface, the soil and the PV panels (front glass / cell / back), and compares modelled fluxes (H, LE, Rn, G) with measurements. The user writes in French.
+
+**ARPS is the reference.** The same PV-LAND code runs coupled in ARPS (`../arps5.3.4_PVLAND`, `sfcphy = 5`; GitHub `sylllvain/arps_pvland`). This repository is only an offline driver around exact copies of the ARPS sources, so that PV-LAND changes can be moved between both models without manual porting. See `README.md` (French) for the user-facing summary.
+
+## Layout and the "do not edit" rule
+
+- `core/`: PV-LAND physics, verbatim copies of ARPS `src/arps/module_pvland.f90`, `pvland.f90` (`INIT_PVLAND`, `DRAG_PVLAND`, `solve_air_node_temperatures`, `compute_all_forcings`, `compute_lambda_phi`), `pvland_profil.f90`, `pvland_view_factors.f90`, `pvland_solar_radiation.f90`, `pvland_radiosity_SW/LW.f90`, `pvland_pv_thermal.f90`.
+- `arps_lib/`: ARPS routines used by PV-LAND: `soilebm3d.f90`, `thermolib3d.f90` (verbatim), `sfcphy3d_extract.f90` (`sfcflx`, `dragcoef`, `cuc`, `cptc`, `cucwtr`, `cptcwtr`, `cuneuwtr`, `cptneuwtr` extracted from ARPS `sfcphy3d.f90`), `tmix3d_extract.f90` (`tridiag2`), and `include/*.inc`.
+- `offline/pvland_sfcphy_offline.f90`: one PV-LAND time step. **Generated** by `scripts/sync_from_arps.py` from the `ELSE IF ( sfcphy == 5 )` block of ARPS `sfcphy3d.f90`, inserted into `scripts/pvland_sfcphy_offline.tmpl.f90` (declarations). Only lines tagged `[OFFLINE]` differ from ARPS: measured diffuse SW instead of `split_sw`, measured lambda/phi instead of `compute_lambda_phi`, measured Obukhov length instead of the flux-based one; `[OFFLINE DIAG]` lines save `uref`, `cdh_can`, `cdh_PVa` for the output files.
+- `offline/pvland_offline_main.f90` and `offline/pvland_park_map.f90`: the only hand-written offline-specific Fortran.
+- `legacy/`: old offline sources, not built.
+
+Never edit `core/`, `arps_lib/` or the generated driver by hand. Change ARPS (or the template / the substitutions in `make_offline_step()` of the sync script), then `make sync-arps`. `make check-arps` (exit 1 on difference) verifies everything matches ARPS.
+
+Host-specific hook: `INIT_PVLAND` calls `pvland_park_map(nx,ny,pv_park,tem1)`; ARPS provides an MPI/grid version (`src/arps/pvland_park_map.f90`), the offline one sets `pv_park = 1`.
 
 ## Build and run
 
 ```bash
-make            # builds pv_land.exe with ifx (Intel oneAPI)
-make clean      # remove *.o, *.mod, executable
+make              # build pv_land.exe (objects and .mod in build/)
+make run          # full forcing, ~2 min
+make run-short    # 5-day forcing recorded_data_short_5days.csv, ~15 s
+make check-arps   # compare with ../arps5.3.4_PVLAND (ARPS_DIR=... to override)
+make sync-arps    # copy/generate from ARPS
 make rebuild
-make run        # build then ./pv_land.exe
 ```
 
-- The compiler is `ifx` with `-g -traceback -check bounds`. gfortran flags are kept commented out in the Makefile; switching to gfortran also requires `LDFLAGS = -llapack -lblas` plus the system LAPACK packages.
-- LAPACK (`SGESV`, used in `radiosity_SW.f90` / `radiosity_LW.f90`) comes from Intel MKL (`-qmkl=sequential`). The oneAPI environment (`setvars.sh`) is usually not sourced locally, so the Makefile hardcodes `MKLROOT` and `INTEL_LIB` under `/opt/intel/oneapi/.../latest` and sets an rpath to them. Override these variables if the install lives somewhere else.
-- Header dependencies are not tracked: after editing a `.inc` file, run `make rebuild`.
-- On the HPC cluster the run is submitted with `sbatch batch_curta.sh` (Slurm; it loads `compiler/2023.0.0` and runs `./pv_land.exe`).
-- There is no test suite. Validate a change by running the model and comparing `H_model`/`LE_model`/... with the `*_meas` columns in `pv_land_output.csv`. The radiosity modules also have `validate_*_conservation` and `check_*_physical_validity` routines.
+- Compiler `ifx`, `FFLAGS = -O2 -traceback` (debug line `-g -traceback -check bounds` kept commented). REAL is single precision, as in ARPS. gfortran flags are commented out; gfortran needs `MODFLAG = -J$(BUILDDIR)` and `-llapack -lblas`.
+- LAPACK (`SGESV`, radiosity solvers) comes from Intel MKL (`-qmkl=sequential`); the Makefile hardcodes `MKLROOT`/`INTEL_LIB` under `/opt/intel/oneapi/.../latest` with an rpath, since `setvars.sh` is often not sourced.
+- Compiler warnings about `cdm_PVb`/`cdm_PVf` (INTENT(OUT) not set in `DRAG_PVLAND`) and subnormal constants in `pvland_profil.f90` come from the ARPS code and are known.
+- On the cluster: `sbatch batch_curta.sh`.
+- No test suite. Reference outputs of the pre-restructuring model are kept locally (git-ignored) in `ref_8d92348/{full,short_5days}{,_O2}/`. Validate a change with `make run-short` and compare `pv_land_output.csv` with the reference, then with the `*_meas` columns.
 
-## Inputs / outputs (hardcoded file names in `pv_land_main.f90`)
+## Inputs / outputs
 
-- Input: `recorded_data_adjusted_daily_summer_2025.csv`. Columns are read by position, in this order: `t, wind_speed, wind_dir, T6 (°C, converted to K), specific_humidity, Rain, SWout, SWin, LWout, LWin, air_pressure, air_density, H, LE, G, RN, SW_diffus, lambda, phi, L (Obukhov length)`. Rows are 30 min apart. `lambda`/`phi` are solar angles in the park frame, precomputed by the standalone `calcul_angle_zen_azi_sylvain_v2.f90` program.
-- Outputs: `pv_land_output.csv` (modelled vs measured fluxes, natural-surface diagnostics) and `pv_diag_energy_balance.csv` (PV panel energy-balance terms).
-- Park geometry, optical properties and roughness are `PARAMETER`s at the top of `pv_land_main.f90`. Changing them means recompiling.
+- Forcing: first command-line argument, default `recorded_data_adjusted_daily_summer_2025.csv`. Columns read by position: `t, wind_speed, wind_dir, T6 (°C), specific_humidity, Rain, SWout, SWin, LWout, LWin, air_pressure, air_density, H, LE, G, RN, SW_diffus, lambda, phi, L (Obukhov length)`. Rows 30 min apart. `lambda`/`phi` (rad, park frame) are precomputed by the standalone `calcul_angle_zen_azi_sylvain_v2.f90`.
+- Outputs: `pv_land_output.csv` and `pv_diag_energy_balance.csv` (same columns as before the restructuring).
+- PV park geometry and optical properties: in `INIT_PVLAND` (`core/pvland.f90`, i.e. in ARPS). Site parameters (z0_nat, soil/vegetation types, initial soil state, `dtsfc = 2 s`): top of `offline/pvland_offline_main.f90`.
 
-## Architecture
+## Offline driver
 
-Call flow per 30-min forcing interval:
+`pvland_offline_main` builds an ARPS-like single column on a `nx = ny = 2`, `nz = 3` grid (ARPS loops run 1..nx-1, so only column (1,1) is computed; scalar level 2 is the reference level at 3.3·h_PV). Per 30-min forcing interval it sub-steps `nsfcst = 1800/dtsfc` times: linear interpolation of the forcing, `u = U sin(dir)`, `v = U cos(dir)` (so `DRAG_PVLAND` recovers `dir = ATAN2(u,v)`), then `pvland_sfcphy_offline`, which is the ARPS sequence: `DRAG_PVLAND` (wind profile, exchange coefficients), `solve_air_node_temperatures`, RK2 predictor (dt/2)/corrector as in `soilebm` with `compute_all_forcings` at both stages, final diagnostics (`H_ref`, ...). State lives in ARPS arrays (`tsoil`, `qsoil`, `wetcanp`, `qvsfc`) and in the modules `module_pvland_in/out` (`T_PVf`, `T_can`, ...).
 
-1. `pv_land_main` reads the CSV and loops over the forcing rows. For each interval it fills 2-time-level arrays (`*i(nx,ny,2)`), then calls `pv_land`. The grid is a dummy `nx=ny=2`; the physics is effectively single-column.
-2. `pv_land` (`pv_land.f90`) sub-steps with `nsfcst = 1800/dtsfc` small steps (`dtsfc` is set in main and passed through ARPS common blocks in `globcst.inc`). At each sub-step it:
-   - linearly interpolates the forcing in time;
-   - gets wind-direction-dependent park roughness/displacement (`z0_theta`, `d_theta`) and wind speeds at the canopy (`can`), panel-air (`PVa`) and reference heights from the analytic PV-park wind profile in `profil.f90` (`compute_U_plus`, with MOST stability correction from the Obukhov length);
-   - computes surface/air exchange coefficients with ARPS `dragcoef` (`dragcoef_sfcflx.f90`) for nat, PV front/back, can→ref and PVa→ref;
-   - solves the two air-node temperatures `T_can`/`T_PVa` diagnostically (`pv_convection.f90`);
-   - integrates all prognostic nodes (`T_nat`, `T_soil`, soil moisture, `T_PVf`, `T_cell`, `T_PVb`) together with an RK2 predictor/corrector. Both stages call `compute_all_forcings`.
-3. `compute_all_forcings` builds the tendencies:
-   - shortwave: geometric view factors (`view_factors.f90`), direct-beam fractions on each surface (`solar_radiation.f90`), multiple reflections via an N-surface radiosity linear system (`radiosity_SW.f90`);
-   - longwave: same radiosity approach (`radiosity_LW.f90`);
-   - ground/soil: ARPS `soilebm_frc` (`soilebm3d.f90`);
-   - panels: conduction through the glass/EVA/cell/backsheet stack and electrical power removal (`pv_thermal.f90`).
+Behaviour inherited from ARPS: `uref = MAX(vsfcmin = 0.1 m/s, |V|)` in `DRAG_PVLAND`.
 
-The radiating surfaces are the ground (`nat`), the PV front (`PVf`) and the PV back (`PVb`), plus the sky. Naming uses the suffixes `_nat`, `_PVf`, `_PVb`, `_cell`, `_can`, `_PVa`, `_ref` consistently across files.
+Conventions inherited from ARPS: upper-case Fortran, mostly implicit interfaces (argument lists must match exactly), global constants through `INCLUDE`d common blocks.
 
-Conventions inherited from ARPS: fixed-form-style upper-case Fortran, implicit interfaces (no modules, so argument lists must match exactly between caller and callee), and global constants/state shared through `INCLUDE`d common blocks (`globcst.inc`, `phycst.inc`, `sfcphycst.inc`, `soilcst.inc`, `grid.inc`, `timelvls.inc`).
+## Version control
 
-## Files not in the build
-
-The Makefile `SOURCES` list is the source of truth. These files are not built: `compute_all_forcings_old.f90`, `pv_nodes_forcing.f90`, `Read_CSV_v1.f90`, and the `calcul_angle_*` standalone programs. `files_new/` holds alternative versions of some sources; `pv_land.f90`, `pv_land_main.f90` and `dragcoef_sfcflx.f90` there differ from the ones at the top level. Edit the top-level files unless asked otherwise.
+Git repository, branch `main`, private GitHub repo `sylllvain/pv-land` (remote `origin` over SSH; `gh` is not installed). `.gitignore` excludes `build/`, build products, `slurm-*.out`/`*.log`, run outputs (`pv_land_output.csv`, `pv_diag_energy_balance.csv` in any directory, `*.plt`), `*.zip`, `pdf/`, `*.swp`. Input data are tracked.

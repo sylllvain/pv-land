@@ -17,3 +17,6 @@ pdf/
 
 # Éditeur
 *.swp
+
+# Build directory (objects, .mod)
+build/
