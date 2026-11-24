@@ -54,6 +54,7 @@ PROGRAM pv_land_main
   ! ====== File I/O ======
   INTEGER :: temp, ios, t
   CHARACTER(LEN=500) :: line
+  CHARACTER(LEN=256) :: forcing_file    ! forcing CSV (1st command-line argument)
   
   ! ====== CSV input arrays ======
   REAL :: uref_input(ntot_max), udir_input(ntot_max)
@@ -145,9 +146,15 @@ PROGRAM pv_land_main
   ! READ CSV INPUT
   !=====================================================================
   
-  WRITE(*,*) 'Reading forcing data from CSV...'
-  
-  OPEN(UNIT=10, FILE='recorded_data_adjusted_daily_summer_2025.csv', STATUS='old')
+  ! Forcing file: optional 1st command-line argument, e.g.
+  !   ./pv_land.exe recorded_data_short_5days.csv
+  ! default = full summer 2025 record  [SYLVAIN]
+  forcing_file = 'recorded_data_adjusted_daily_summer_2025.csv'
+  IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, forcing_file)
+
+  WRITE(*,*) 'Reading forcing data from CSV: ', TRIM(forcing_file)
+
+  OPEN(UNIT=10, FILE=TRIM(forcing_file), STATUS='old')
   READ(10,*)  ! Skip header
   
   temp = 1

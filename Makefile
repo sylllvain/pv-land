@@ -8,7 +8,10 @@ FC = ifx
 # Compiler flags
 #FFLAGS = -O2 -fdefault-real-8 -fdefault-double-8 -ffree-form -ffree-line-length-none -fno-align-commons
 #FFLAGS = -g -fdefault-real-8 -fdefault-double-8 -ffree-form -ffree-line-length-none -fno-align-commons
-FFLAGS = -g -traceback -check bounds
+# ifx : debug (lent)
+#FFLAGS = -g -traceback -check bounds
+# ifx : optimisé (meme precision que la version debug : REAL simple precision)
+FFLAGS = -O2 -traceback
 
 # Linker flags
 # ifx : LAPACK/BLAS fournis par Intel MKL (gfortran : -llapack -lblas)
