@@ -9,19 +9,19 @@ exactement les mêmes sources.
 
 | Répertoire | Contenu | Modifiable ici ? |
 |---|---|---|
-| `core/` | physique PV-LAND : copies de `src/arps/pvland*.f90` et `module_pvland.f90` d'ARPS | **non** |
+| `core/` | physique PV-LAND : copies de `src/arps/pvland*.f90` et `module_pvland.f90` d'ARPS, dont `pvland_driver.f90` (un pas de temps PV-LAND, `pvland_sfcphy`, appelé aussi par ARPS) | **non** |
 | `arps_lib/` | routines ARPS utilisées par PV-LAND (`soilebm3d`, `thermolib3d`, `sfcflx`/`dragcoef`… extraits de `sfcphy3d.f90`, `tridiag2` de `tmix3d.f90`) et fichiers `.inc` | **non** |
-| `offline/pvland_sfcphy_offline.f90` | un pas de temps PV-LAND : **généré** à partir du bloc `sfcphy == 5` de `sfcphy3d.f90` d'ARPS | **non** |
 | `offline/pvland_offline_main.f90` | lecture du CSV, état atmosphérique en colonne, boucle temporelle, sorties | oui |
 | `offline/pvland_park_map.f90` | emplacement du parc (tout le domaine en offline) | oui |
-| `scripts/` | `sync_from_arps.py` (copie/génération depuis ARPS ou vérification) et le gabarit `pvland_sfcphy_offline.tmpl.f90` | oui |
+| `scripts/` | `sync_from_arps.py` (copie depuis ARPS ou vérification) | oui |
 | `legacy/` | anciennes versions non compilées | — |
 
-Le pilote généré ne diffère du bloc ARPS que par les lignes marquées `[OFFLINE]` :
-l'offline utilise le **rayonnement diffus mesuré** (au lieu de `split_sw`), les
-**angles λ, φ mesurés** (au lieu de `compute_lambda_phi`) et la **longueur
-d'Obukhov mesurée** (au lieu de celle calculée à partir des flux). Les lignes
-ARPS d'origine restent visibles en commentaire juste au-dessus.
+ARPS (`sfcphy3d.f90`, `sfcphy = 5`) et l'offline appellent la **même routine**
+`pvland_sfcphy`. Seul l'argument `meas_opt` diffère : ARPS passe `0` (part
+diffuse par `split_sw`, angles λ, φ par `compute_lambda_phi`, longueur
+d'Obukhov calculée à partir des flux du pas précédent) ; l'offline passe `1` et
+fournit le **rayonnement diffus**, les **angles λ, φ** et la **longueur
+d'Obukhov mesurés**.
 
 ## Compilation et exécution
 
@@ -38,7 +38,7 @@ Sorties : `pv_land_output.csv` (flux modélisés et mesurés, températures) et
 ## Modifier PV-LAND
 
 1. Faire la modification dans ARPS (`arps5.3.4_PVLAND/src/arps/`).
-2. `make sync-arps` : recopie `core/`, `arps_lib/` et régénère le pilote.
+2. `make sync-arps` : recopie `core/` et `arps_lib/`.
 3. `make && make run-short` pour tester.
 
 On peut aussi modifier un fichier de `core/` ici pour tester, puis le recopier
@@ -47,3 +47,9 @@ dans ARPS ; `make check-arps` signale tout fichier qui diffère d'ARPS.
 Les paramètres du parc (géométrie, propriétés optiques) sont dans
 `INIT_PVLAND` (`core/pvland.f90`), comme dans ARPS. Les paramètres du site
 (sol, végétation, état initial) sont en tête de `offline/pvland_offline_main.f90`.
+
+`vf_update_opt` (dans `INIT_PVLAND`) choisit quand recalculer tout ce qui
+dépend de l'inclinaison β des panneaux (facteurs de vue, F_sky, factorisations
+des matrices de radiosité, h_clear, z_can, z_PVa…), via `pvland_geometry` :
+`0` = une seule fois à l'initialisation (panneaux fixes), `1` = à chaque pas de
+temps (panneaux mobiles, suivi du soleil ; la loi de suivi β(t) reste à écrire).

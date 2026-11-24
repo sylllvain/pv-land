@@ -1,118 +1,42 @@
-!##################################################################
-!##################################################################
-!######                                                      ######
-!######             SUBROUTINE PVLAND_SFCPHY_OFFLINE         ######
-!######                                                      ######
-!##################################################################
-!##################################################################
+!########################################################################
+!########################################################################
+!#########                                                      #########
+!#########             MODULE pvland_sfcphy_work                #########
+!#########                                                      #########
+!########################################################################
+!########################################################################
+!
+! Work arrays of SUBROUTINE pvland_sfcphy, allocated at the first call
+! and kept between calls. They are in a module (instead of local SAVE
+! arrays) so that drivers can read diagnostics such as uref, cdh_can
+! or cdh_PVa (offline model output).  [SYLVAIN]
 
-SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
-           u,v,w,ptprt,pprt,qv,ptbar,pbar,qvbar,zp,prcrate,            &
-           soiltyp,stypfrct,vegtyp,lai,roufns,veg,                      &
-           tsoil,qsoil,wetcanp,snowdpth,qvsfc,                          &
-           radsw,rnflx,radlwin,psfc,rhosfc,gumove,                      &
-           cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
-           S_diffuse_in,lambda_in,phi_in,L_obk_in,                      &
-           uref_diag,cdh_can_diag,cdh_PVa_diag)
-!
-!-----------------------------------------------------------------------
-!
-!  PURPOSE:
-!
-!  One PV-LAND surface time step (dtsfc) for the offline model.
-!
-!  The executable part is a COPY of the PV-LAND block of ARPS
-!  (sfcphy3d.f90, SUBROUTINE sfcphysics, "ELSE IF ( sfcphy == 5 )"),
-!  generated automatically. Only the lines tagged [OFFLINE] differ:
-!  the offline model is forced by MEASURED values instead of
-!    - split_sw            -> measured diffuse SW     (S_diffuse_in)
-!    - compute_lambda_phi  -> measured lambda, phi    (lambda_in, phi_in, rad)
-!    - L_obk from ptsflx   -> measured Obukhov length (L_obk_in)
-!  and the original ARPS lines are kept commented out just above them.
-!  Three lines tagged [OFFLINE DIAG] save local diagnostics (uref,
-!  cdh_can, cdh_PVa) for the offline output files.
-!
-!  Any change of the PV-LAND physics must be done in ARPS (or ported
-!  to ARPS) and this file regenerated, see README / Makefile.
-!
-!-----------------------------------------------------------------------
-!
-  USE module_pvland_in
-  USE module_pvland_out
-  USE rad_pvland
-  USE rad_split
+MODULE pvland_sfcphy_work
 
   IMPLICIT NONE
 
-  INTEGER :: nx,ny,nz,nzsoil,nstyps
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdm_u,cdm_v
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: z0_PV
 
-  REAL :: u     (nx,ny,nz), v(nx,ny,nz), w(nx,ny,nz)
-  REAL :: ptprt (nx,ny,nz), pprt(nx,ny,nz), qv(nx,ny,nz)
-  REAL :: ptbar (nx,ny,nz), pbar(nx,ny,nz), qvbar(nx,ny,nz)
-  REAL :: zp    (nx,ny,nz)
-  REAL :: prcrate(nx,ny)
-
-  INTEGER :: soiltyp (nx,ny,nstyps), vegtyp(nx,ny)
-  REAL    :: stypfrct(nx,ny,nstyps)
-  REAL    :: lai(nx,ny), roufns(nx,ny), veg(nx,ny)
-
-  REAL :: tsoil  (nx,ny,nzsoil,0:nstyps)
-  REAL :: qsoil  (nx,ny,nzsoil,0:nstyps)
-  REAL :: wetcanp(nx,ny,0:nstyps)
-  REAL :: snowdpth(nx,ny)
-  REAL :: qvsfc  (nx,ny,0:nstyps)
-
-  REAL :: radsw  (nx,ny)    ! Incoming solar radiation
-  REAL :: rnflx  (nx,ny)    ! Net radiation (used outside the park only)
-  REAL :: radlwin(nx,ny)    ! Incoming longwave radiation
-  REAL :: psfc   (nx,ny)    ! Surface pressure (Pascal)
-  REAL :: rhosfc (nx,ny)    ! Air density at the surface
-  REAL :: gumove            ! Domain translation speed (0 offline)
-
-  REAL :: cdm(nx,ny), cdh(nx,ny), cdq(nx,ny)
-  REAL :: usflx(nx,ny), vsflx(nx,ny), ptsflx(nx,ny), qvsflx(nx,ny)
-
-  REAL :: S_diffuse_in(nx,ny)   ! [OFFLINE] measured diffuse SW (W/m2)
-  REAL :: lambda_in(nx,ny)      ! [OFFLINE] measured lambda, park frame (rad)
-  REAL :: phi_in(nx,ny)         ! [OFFLINE] measured phi, park frame (rad)
-  REAL :: L_obk_in(nx,ny)       ! [OFFLINE] measured Obukhov length (m)
-
-  REAL :: uref_diag(nx,ny), cdh_can_diag(nx,ny), cdh_PVa_diag(nx,ny) ! [OFFLINE] diagnostics
-!
-!-----------------------------------------------------------------------
-!  Local variables of sfcphysics used by the PV-LAND block
-!-----------------------------------------------------------------------
-!
-  REAL, PARAMETER :: pi = 3.14159265359
-
-  REAL :: pt1    (nx,ny)    ! Potential temperature at 1st model level AGL
-  REAL :: tair   (nx,ny)    ! Temperature of surface air
-  REAL :: qvair  (nx,ny)    ! Specific humidity of surface air
-
-  REAL :: z_ref,usuf,vsuf,Uplus
-  ! PV-LAND work arrays: SAVE, allocated at the first call only (as in ARPS)
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdm_u,cdm_v
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: z0_PV
-
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: uref,T_nat,T_soil,qsoil_surf,&
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: uref,T_nat,T_soil,qsoil_surf,&
 	qsoil_deep,S_diffuse,S_direct,wrmax
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_nat,cdq_nat,cdm_nat
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVa,cdq_PVa,cdm_PVa
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVb,cdq_PVb,cdm_PVb
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVf,cdq_PVf,cdm_PVf
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_can,cdq_can,cdm_can
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: L_obk
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_nat,cdq_nat,cdm_nat
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVa,cdq_PVa,cdm_PVa
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVb,cdq_PVb,cdm_PVb
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVf,cdq_PVf,cdm_PVf
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_can,cdq_can,cdm_can
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: L_obk
 
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
 	rhs_PVb,rhs_wsfc,rhs_wdp,rhs_wcnp
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: frc_nat,frc_soil,frc_PVf,frc_cell,&
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: frc_nat,frc_soil,frc_PVf,frc_cell,&
 	frc_PVb,frc_wsfc,frc_wdp,frc_wcnp
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: T_nat_half,T_soil_half,T_PVf_half,&
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: T_nat_half,T_soil_half,T_PVf_half,&
 	T_cell_half,T_PVb_half,qsoil_surf_half,qsoil_deep_half
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:,:) :: wetcanp_half
+  REAL, ALLOCATABLE, DIMENSION (:,:,:) :: wetcanp_half
 
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: SW_out_sky_loc, LW_out_sky_loc
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: dum_qLW_PVf, dum_qLW_PVb, &
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: SW_out_sky_loc, LW_out_sky_loc
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: dum_qLW_PVf, dum_qLW_PVb, &
                              dum_H_PVf, dum_H_PVb, &
                              dum_qcond_PVf, dum_qcond_PVb, &
                              dum_qSW_PVf, dum_qSW_PVb, &
@@ -122,11 +46,106 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
                              dum_JLW_PVf, dum_JLW_PVb, &
                              dum_G_SW_nat, dum_J_SW_nat, &
                              dum_G_LW_nat, dum_J_LW_nat
-  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: lambda_deg,phi_deg
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: lambda_deg,phi_deg
 
+END MODULE pvland_sfcphy_work
+
+!########################################################################
+!########################################################################
+!#########                                                      #########
+!#########             SUBROUTINE pvland_sfcphy                 #########
+!#########                                                      #########
+!########################################################################
+!########################################################################
+
+SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
+           u,v,w,ptprt,pprt,qv,ptbar,pbar,qvbar,zp,prcrate,            &
+           soiltyp,stypfrct,vegtyp,lai,roufns,veg,                      &
+           tsoil,qsoil,wetcanp,snowdpth,qvsfc,                          &
+           radsw,rnflx,radlwin,psfc,rhosfc,gumove,                      &
+           cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
+           pt1,tair,qvair,                                              &
+           meas_opt,S_diffuse_in,lambda_in,phi_in,L_obk_in)
+!
+!-----------------------------------------------------------------------
+!
+!  PURPOSE:
+!
+!  One PV-LAND surface time step (dtsfc): exchange coefficients, surface
+!  fluxes and RK2 (predictor-corrector, as in soilebm) integration of
+!  the soil, PV panel and air node temperatures and of soil moisture.
+!
+!  Called by ARPS (sfcphysics, sfcphy == 5) and by the PV-LAND offline
+!  model: both use exactly this routine.
+!
+!  meas_opt = 0 (ARPS): the diffuse solar radiation (split_sw), the sun
+!                 angles in the park frame (compute_lambda_phi) and the
+!                 Obukhov length (surface fluxes of the previous step)
+!                 are computed; S_diffuse_in, lambda_in, phi_in and
+!                 L_obk_in are not used.
+!  meas_opt = 1 (offline): they are taken from S_diffuse_in (W/m2),
+!                 lambda_in, phi_in (rad, park frame) and L_obk_in (m).
+!
+!  AUTHOR: moved from sfcphy3d.f90 (sfcphy == 5 block)  [SYLVAIN]
+!
+!-----------------------------------------------------------------------
+!
+  USE module_pvland_in
+  USE module_pvland_out
+  USE rad_pvland
+  USE rad_split
+  USE pvland_sfcphy_work
+  USE pvland_rad_cache, ONLY : vf_update_opt
+
+  IMPLICIT NONE
+
+  INTEGER :: nx,ny,nz,nzsoil,nstyps
+
+  REAL :: u     (nx,ny,nz), v(nx,ny,nz), w(nx,ny,nz)
+  REAL :: ptprt (nx,ny,nz), pprt(nx,ny,nz), qv(nx,ny,nz)
+  REAL :: ptbar (nx,ny,nz), pbar(nx,ny,nz), qvbar(nx,ny,nz)
+  REAL :: zp    (nx,ny,nz)  ! Height of the w-points (m)
+  REAL :: prcrate(nx,ny)    ! Precipitation rate (kg/(m**2*s))
+
+  INTEGER :: soiltyp (nx,ny,nstyps), vegtyp(nx,ny)
+  REAL    :: stypfrct(nx,ny,nstyps)
+  REAL    :: lai(nx,ny), roufns(nx,ny), veg(nx,ny)
+
+  REAL :: tsoil  (nx,ny,nzsoil,0:nstyps)  ! Soil temperature (K)
+  REAL :: qsoil  (nx,ny,nzsoil,0:nstyps)  ! Soil moisture (m**3/m**3)
+  REAL :: wetcanp(nx,ny,0:nstyps)         ! Canopy water amount
+  REAL :: snowdpth(nx,ny)                 ! Snow depth
+  REAL :: qvsfc  (nx,ny,0:nstyps)         ! Effective S.H. at sfc.
+
+  REAL :: radsw  (nx,ny)    ! Incoming solar radiation
+  REAL :: rnflx  (nx,ny)    ! Net radiation (used outside the park only)
+  REAL :: radlwin(nx,ny)    ! Incoming longwave radiation
+  REAL :: psfc   (nx,ny)    ! Surface pressure (Pascal)
+  REAL :: rhosfc (nx,ny)    ! Air density at the surface
+  REAL :: gumove            ! Domain translation speed
+
+  REAL :: cdm(nx,ny), cdh(nx,ny), cdq(nx,ny)   ! Drag coefficients (output)
+  REAL :: usflx(nx,ny), vsflx(nx,ny)           ! Momentum fluxes (in: previous step, out)
+  REAL :: ptsflx(nx,ny), qvsflx(nx,ny)         ! Heat/moisture fluxes (in: previous step, out)
+
+  REAL :: pt1    (nx,ny)    ! Potential temperature at 1st model level AGL (output)
+  REAL :: tair   (nx,ny)    ! Temperature of surface air (output)
+  REAL :: qvair  (nx,ny)    ! Specific humidity of surface air (output)
+
+  INTEGER :: meas_opt           ! 0: computed (ARPS), 1: measured forcing (offline)
+  REAL :: S_diffuse_in(nx,ny)   ! measured diffuse SW (W/m2)        (meas_opt = 1)
+  REAL :: lambda_in(nx,ny)      ! measured lambda, park frame (rad) (meas_opt = 1)
+  REAL :: phi_in(nx,ny)         ! measured phi, park frame (rad)    (meas_opt = 1)
+  REAL :: L_obk_in(nx,ny)       ! measured Obukhov length (m)       (meas_opt = 1)
+!
+!-----------------------------------------------------------------------
+!  Misc. local variables
+!-----------------------------------------------------------------------
+!
+  REAL, PARAMETER :: pi = 3.14159265359
+
+  REAL :: z_ref,usuf,vsuf,Uplus,tema
   INTEGER :: i, j, k, is
-  REAL :: tema
-  REAL :: nsfcstsave
 
   INCLUDE 'globcst.inc'
   INCLUDE 'phycst.inc'
@@ -139,16 +158,8 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
 !
 !@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 !
-!=== BEGIN copy of ARPS sfcphy3d.f90, sfcphy == 5 block ================
-!
-!-----------------------------------------------------------------------
-!
-!  PV-LAND
-!
-!-----------------------------------------------------------------------
-!
 
-  ! work arrays allocated at the first call only (SAVE)  [SYLVAIN]
+  ! work arrays (module pvland_sfcphy_work) allocated at the first call only
   IF (.NOT. ALLOCATED(cdm_u)) THEN
   ALLOCATE(cdm_u(nx,ny),cdm_v(nx,ny),z0_PV(nx,ny))
   ALLOCATE(uref(nx,ny), T_nat(nx,ny), T_soil(nx,ny), qsoil_surf(nx,ny), &
@@ -182,6 +193,12 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
   END IF
 
 
+    ! Moving panels (vf_update_opt = 1): geometry derived from the tilt
+    ! beta (view factors, radiosity LU factors, h_clear, z_can, ...)
+    ! recomputed at every time step. A tracking law updating beta(i,j)
+    ! would be applied just before this call.  [SYLVAIN]
+    IF (vf_update_opt == 1) CALL pvland_geometry(nx,ny)
+
     DO j=1,ny-1
       DO i=1,nx-1
         pt1(i,j) = (ptbar(i,j,2)+ptprt(i,j,2))
@@ -198,27 +215,27 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
     qvsfc(:,:,0)   = 0.0
 
 
-    IF ( soilinitopt == 1 .AND. nstep == 1 ) THEN
-      nsfcstsave = nsfcst
-      nsfcst = nint(soiltintv/dtsfc)
-    END IF
     
     DO j=1,ny-1
       DO i=1,nx-1
       
       IF (pv_park(i,j).eq.1.) THEN
       
-!     ! split solar radiation between direct and diffuse
-!     CALL split_sw(radsw(i,j), year, month, day, hour, minute, &
-!                      latitud, longitud, 1, &
-!                      S_diffuse(i,j), S_direct(i,j), 1367.)
-      S_diffuse(i,j) = S_diffuse_in(i,j)                 ! [OFFLINE] measured diffuse SW
-      S_direct(i,j)  = radsw(i,j) - S_diffuse(i,j)       ! [OFFLINE]
+      IF (meas_opt == 0) THEN
+      ! split solar radiation between direct and diffuse
+      CALL split_sw(radsw(i,j), year, month, day, hour, minute, &
+                       latitud, longitud, 1, &
+                       S_diffuse(i,j), S_direct(i,j), 1367.)
                        
       ! Transform zenithal and azimutal angles accoridng to PV park orientation
-!     call compute_lambda_phi(szenith_deg(i,j), sazimuth_deg(i,j)+180., AZ_PARK(i,j), lambda_deg(i,j), phi_deg(i,j))
-      lambda_deg(i,j) = lambda_in(i,j) * 180. / pi       ! [OFFLINE] measured, park frame
-      phi_deg(i,j)    = phi_in(i,j)    * 180. / pi       ! [OFFLINE] measured, park frame
+      call compute_lambda_phi(szenith_deg(i,j), sazimuth_deg(i,j)+180., AZ_PARK(i,j), lambda_deg(i,j), phi_deg(i,j))
+      ELSE
+      ! measured forcing (offline model)
+      S_diffuse(i,j)  = S_diffuse_in(i,j)
+      S_direct(i,j)   = radsw(i,j) - S_diffuse(i,j)
+      lambda_deg(i,j) = lambda_in(i,j) * 180. / pi
+      phi_deg(i,j)    = phi_in(i,j)    * 180. / pi
+      ENDIF
       
 	! Obukhov length from the surface fluxes of the previous time step:
 	!   L = -u*^3 theta / (kv g w'theta'),  with  rho u*^2 = |tau| = SQRT(usflx^2+vsflx^2)
@@ -226,15 +243,16 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
 	!   =>  L = theta |tau|^(3/2) / (kv g ptsflx SQRT(rho))   (L<0 unstable, L>0 stable)
 	! usflx/vsflx are defined at u/v points (computed for i,j = 2..n-1):
 	! averaged to the scalar point, one-sided at the domain edges.  [SYLVAIN]
-!	if (ptsflx(i,j).ne.0.) then
-!			L_obk(i,j) = pt1(i,j)*(                                         &
-!				(0.5*(usflx(MAX(i,2),j)+usflx(MIN(i+1,nx-1),j)))**2 +   &
-!				(0.5*(vsflx(i,MAX(j,2))+vsflx(i,MIN(j+1,ny-1))))**2     &
-!				)**(3./4.)/(kv*g*ptsflx(i,j)*sqrt(rhosfc(i,j)))
-!	else
-!			L_obk(i,j) = -1000.
-!	endif
-      L_obk(i,j) = L_obk_in(i,j)                         ! [OFFLINE] measured Obukhov length
+	if (meas_opt /= 0) then
+			L_obk(i,j) = L_obk_in(i,j)          ! measured (offline model)
+	else if (ptsflx(i,j).ne.0.) then
+			L_obk(i,j) = pt1(i,j)*(                                         &
+				(0.5*(usflx(MAX(i,2),j)+usflx(MIN(i+1,nx-1),j)))**2 +   &
+				(0.5*(vsflx(i,MAX(j,2))+vsflx(i,MIN(j+1,ny-1))))**2     &
+				)**(3./4.)/(kv*g*ptsflx(i,j)*sqrt(rhosfc(i,j)))
+	else
+			L_obk(i,j) = -1000.
+	endif
 	! Bound the instability: zeta = z_ref/L_obk >= -5, i.e. L_obk <= -z_ref/5
 	! when unstable (avoids a vanishing L_obk at weak wind).  [SYLVAIN]
 	z_ref = zp(i,j,2) + 0.5*(zp(i,j,3)-zp(i,j,2))
@@ -688,43 +706,5 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
 
     END DO  ! loop over is
 
-  uref_diag    = uref        ! [OFFLINE DIAG]
-  cdh_can_diag = cdh_can     ! [OFFLINE DIAG]
-  cdh_PVa_diag = cdh_PVa     ! [OFFLINE DIAG]
-
-  ! work arrays kept for the next call (SAVE)  [SYLVAIN]
-!  DEALLOCATE(cdm_u,cdm_v,z0_PV)
-
-!  DEALLOCATE(uref, T_nat, T_soil, qsoil_surf, qsoil_deep, S_diffuse, &
-!	S_direct, wrmax)
-!  DEALLOCATE(cdh_nat,cdq_nat,cdm_nat)
-!  DEALLOCATE(cdh_PVa,cdq_PVa,cdm_PVa)
-!  DEALLOCATE(cdh_PVb,cdq_PVb,cdm_PVb)
-!  DEALLOCATE(cdh_PVf,cdq_PVf,cdm_PVf)
-!  DEALLOCATE(cdh_can,cdq_can,cdm_can)
-!  DEALLOCATE(L_obk)
-
-!  DEALLOCATE(rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
-!	rhs_PVb,rhs_wsfc,rhs_wdp,rhs_wcnp)
-!  DEALLOCATE(frc_nat,frc_soil,frc_PVf,frc_cell,&
-!	frc_PVb,frc_wsfc,frc_wdp,frc_wcnp)
-!  DEALLOCATE(T_nat_half,T_soil_half,T_PVf_half,&
-!	T_cell_half,T_PVb_half,qsoil_surf_half,qsoil_deep_half,wetcanp_half)
-	
-!  DEALLOCATE(SW_out_sky_loc, LW_out_sky_loc)	
-!  DEALLOCATE(dum_qLW_PVf, dum_qLW_PVb, &
-!                             dum_H_PVf, dum_H_PVb, &
-!                             dum_qcond_PVf, dum_qcond_PVb, &
-!                             dum_qSW_PVf, dum_qSW_PVb, &
-!                             dum_qPV, &
-!                             dum_cdh_can, dum_cdh_PVa, &
-!                             dum_T_can, dum_T_PVa, &
-!                             dum_JLW_PVf, dum_JLW_PVb, &
-!                             dum_G_SW_nat, dum_J_SW_nat, &
-!                             dum_G_LW_nat, dum_J_LW_nat)
-
-!  DEALLOCATE(lambda_deg,phi_deg)
-!=== END copy of ARPS sfcphy3d.f90, sfcphy == 5 block ==================
-
   RETURN
-END SUBROUTINE pvland_sfcphy_offline
+END SUBROUTINE pvland_sfcphy

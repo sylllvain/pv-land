@@ -10,13 +10,13 @@ PV-LAND offline: a Fortran 90 land-surface model for a ground-mounted photovolta
 
 ## Layout and the "do not edit" rule
 
-- `core/`: PV-LAND physics, verbatim copies of ARPS `src/arps/module_pvland.f90`, `pvland.f90` (`INIT_PVLAND`, `DRAG_PVLAND`, `solve_air_node_temperatures`, `compute_all_forcings`, `compute_lambda_phi`), `pvland_profil.f90`, `pvland_view_factors.f90`, `pvland_solar_radiation.f90`, `pvland_radiosity_SW/LW.f90`, `pvland_pv_thermal.f90`.
+- `core/`: PV-LAND physics, verbatim copies of ARPS `src/arps/module_pvland.f90`, `pvland.f90` (`INIT_PVLAND`, `DRAG_PVLAND`, `solve_air_node_temperatures`, `compute_all_forcings`, `compute_lambda_phi`), `pvland_profil.f90`, `pvland_view_factors.f90`, `pvland_solar_radiation.f90`, `pvland_radiosity_SW/LW.f90`, `pvland_pv_thermal.f90`, and `pvland_driver.f90` (module `pvland_sfcphy_work` + `SUBROUTINE pvland_sfcphy`: one PV-LAND time step, called by ARPS `sfcphy3d.f90` for `sfcphy == 5` and by the offline main program).
 - `arps_lib/`: ARPS routines used by PV-LAND: `soilebm3d.f90`, `thermolib3d.f90` (verbatim), `sfcphy3d_extract.f90` (`sfcflx`, `dragcoef`, `cuc`, `cptc`, `cucwtr`, `cptcwtr`, `cuneuwtr`, `cptneuwtr` extracted from ARPS `sfcphy3d.f90`), `tmix3d_extract.f90` (`tridiag2`), and `include/*.inc`.
-- `offline/pvland_sfcphy_offline.f90`: one PV-LAND time step. **Generated** by `scripts/sync_from_arps.py` from the `ELSE IF ( sfcphy == 5 )` block of ARPS `sfcphy3d.f90`, inserted into `scripts/pvland_sfcphy_offline.tmpl.f90` (declarations). Only lines tagged `[OFFLINE]` differ from ARPS: measured diffuse SW instead of `split_sw`, measured lambda/phi instead of `compute_lambda_phi`, measured Obukhov length instead of the flux-based one; `[OFFLINE DIAG]` lines save `uref`, `cdh_can`, `cdh_PVa` for the output files.
+- `pvland_sfcphy(..., meas_opt, S_diffuse_in, lambda_in, phi_in, L_obk_in)`: ARPS passes `meas_opt = 0` (diffuse SW from `split_sw`, lambda/phi from `compute_lambda_phi`, Obukhov length from the previous-step fluxes, bounded to zeta >= -5); the offline model passes `meas_opt = 1` (measured values; the zeta bound still applies). The offline output reads `uref`, `cdh_can`, `cdh_PVa` from module `pvland_sfcphy_work`.
 - `offline/pvland_offline_main.f90` and `offline/pvland_park_map.f90`: the only hand-written offline-specific Fortran.
 - `legacy/`: old offline sources, not built.
 
-Never edit `core/`, `arps_lib/` or the generated driver by hand. Change ARPS (or the template / the substitutions in `make_offline_step()` of the sync script), then `make sync-arps`. `make check-arps` (exit 1 on difference) verifies everything matches ARPS.
+Never edit `core/` or `arps_lib/` by hand. Change ARPS, then `make sync-arps`. `make check-arps` (exit 1 on difference) verifies everything matches ARPS.
 
 Host-specific hook: `INIT_PVLAND` calls `pvland_park_map(nx,ny,pv_park,tem1)`; ARPS provides an MPI/grid version (`src/arps/pvland_park_map.f90`), the offline one sets `pv_park = 1`.
 
@@ -27,7 +27,7 @@ make              # build pv_land.exe (objects and .mod in build/)
 make run          # full forcing, ~2 min
 make run-short    # 5-day forcing recorded_data_short_5days.csv, ~15 s
 make check-arps   # compare with ../arps5.3.4_PVLAND (ARPS_DIR=... to override)
-make sync-arps    # copy/generate from ARPS
+make sync-arps    # copy from ARPS
 make rebuild
 ```
 
@@ -41,11 +41,11 @@ make rebuild
 
 - Forcing: first command-line argument, default `recorded_data_adjusted_daily_summer_2025.csv`. Columns read by position: `t, wind_speed, wind_dir, T6 (°C), specific_humidity, Rain, SWout, SWin, LWout, LWin, air_pressure, air_density, H, LE, G, RN, SW_diffus, lambda, phi, L (Obukhov length)`. Rows 30 min apart. `lambda`/`phi` (rad, park frame) are precomputed by the standalone `calcul_angle_zen_azi_sylvain_v2.f90`.
 - Outputs: `pv_land_output.csv` and `pv_diag_energy_balance.csv` (same columns as before the restructuring).
-- PV park geometry and optical properties: in `INIT_PVLAND` (`core/pvland.f90`, i.e. in ARPS). Site parameters (z0_nat, soil/vegetation types, initial soil state, `dtsfc = 2 s`): top of `offline/pvland_offline_main.f90`.
+- PV park geometry and optical properties: in `INIT_PVLAND` (`core/pvland.f90`, i.e. in ARPS). Everything derived from the tilt `beta` (h_clear, width, lambda_f_park, z_can, z_PVa, view factors, radiosity LU factors) is computed by `pvland_geometry`: once in `INIT_PVLAND` when `vf_update_opt = 0` (module `pvland_rad_cache`, set in `INIT_PVLAND`), or at every `pvland_sfcphy` step when `vf_update_opt = 1` (moving panels; no tracking law for `beta` is implemented yet). Site parameters (z0_nat, soil/vegetation types, initial soil state, `dtsfc = 2 s`): top of `offline/pvland_offline_main.f90`.
 
 ## Offline driver
 
-`pvland_offline_main` builds an ARPS-like single column on a `nx = ny = 2`, `nz = 3` grid (ARPS loops run 1..nx-1, so only column (1,1) is computed; scalar level 2 is the reference level at 3.3·h_PV). Per 30-min forcing interval it sub-steps `nsfcst = 1800/dtsfc` times: linear interpolation of the forcing, `u = U sin(dir)`, `v = U cos(dir)` (so `DRAG_PVLAND` recovers `dir = ATAN2(u,v)`), then `pvland_sfcphy_offline`, which is the ARPS sequence: `DRAG_PVLAND` (wind profile, exchange coefficients), `solve_air_node_temperatures`, RK2 predictor (dt/2)/corrector as in `soilebm` with `compute_all_forcings` at both stages, final diagnostics (`H_ref`, ...). State lives in ARPS arrays (`tsoil`, `qsoil`, `wetcanp`, `qvsfc`) and in the modules `module_pvland_in/out` (`T_PVf`, `T_can`, ...).
+`pvland_offline_main` builds an ARPS-like single column on a `nx = ny = 2`, `nz = 3` grid (ARPS loops run 1..nx-1, so only column (1,1) is computed; scalar level 2 is the reference level at 3.3·h_PV). Per 30-min forcing interval it sub-steps `nsfcst = 1800/dtsfc` times: linear interpolation of the forcing, `u = U sin(dir)`, `v = U cos(dir)` (so `DRAG_PVLAND` recovers `dir = ATAN2(u,v)`), then `pvland_sfcphy` (meas_opt = 1), which is the ARPS sequence: `DRAG_PVLAND` (wind profile, exchange coefficients), `solve_air_node_temperatures`, RK2 predictor (dt/2)/corrector as in `soilebm` with `compute_all_forcings` at both stages, final diagnostics (`H_ref`, ...). State lives in ARPS arrays (`tsoil`, `qsoil`, `wetcanp`, `qvsfc`) and in the modules `module_pvland_in/out` (`T_PVf`, `T_can`, ...).
 
 Behaviour inherited from ARPS: `uref = MAX(vsfcmin = 0.1 m/s, |V|)` in `DRAG_PVLAND`.
 

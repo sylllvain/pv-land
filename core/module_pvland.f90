@@ -269,14 +269,19 @@ end module rad_pvland
 !########################################################################
 !
 ! Quantities of the 8-surface radiosity model that do not depend on the
-! surface temperatures, computed once (INIT_PVLAND) or once per change
-! of the solar forcing (compute_all_forcings), instead of at every call.
+! surface temperatures, computed once (INIT_PVLAND, or every time step
+! when vf_update_opt = 1) or once per change of the solar forcing
+! (compute_all_forcings), instead of at every call.
 ! [SYLVAIN]
 
 module pvland_rad_cache
    implicit none
 
   INTEGER, PARAMETER :: nsurf_pv = 8      ! number of radiating surfaces
+
+  ! 0: view factors and LU factorisations computed once (INIT_PVLAND),
+  ! 1: recomputed at every PV-LAND time step (moving panels, beta(t))
+  INTEGER :: vf_update_opt = 0
 
   ! Geometry only (computed in INIT_PVLAND)
   REAL,    ALLOCATABLE :: F_pv(:,:,:,:)     ! view factors   (8,8,nx,ny)

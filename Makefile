@@ -3,17 +3,16 @@
 # Source layout (see README.md):
 #   core/      PV-LAND physics, exact copies of ARPS src/arps/pvland*.f90 (do not edit)
 #   arps_lib/  ARPS routines and include files used by PV-LAND (do not edit)
-#   offline/   offline driver; pvland_sfcphy_offline.f90 is generated from
-#              the ARPS sfcphy3d.f90 PV-LAND block (do not edit)
+#   offline/   offline main program (CSV forcing, outputs) and park map
 #   scripts/   sync_from_arps.py (copy/generate from ARPS, or check)
 #
 # Targets:
 #   make              build pv_land.exe
 #   make run          run with the full forcing
 #   make run-short    run with the 5-day forcing (~8 s)
-#   make check-arps   check that core/, arps_lib/ and the generated driver
-#                     are identical to ARPS ($(ARPS_DIR))
-#   make sync-arps    copy/generate them again from ARPS
+#   make check-arps   check that core/ and arps_lib/ are identical to ARPS
+#                     ($(ARPS_DIR))
+#   make sync-arps    copy them again from ARPS
 #   make clean / rebuild
 
 # Compiler
@@ -57,13 +56,13 @@ CORE_SRC = module_pvland.f90 \
            pvland_radiosity_SW.f90 \
            pvland_radiosity_LW.f90 \
            pvland_pv_thermal.f90 \
-           pvland.f90
+           pvland.f90 \
+           pvland_driver.f90
 LIB_SRC  = sfcphy3d_extract.f90 \
            tmix3d_extract.f90 \
            thermolib3d.f90 \
            soilebm3d.f90
 OFF_SRC  = pvland_park_map.f90 \
-           pvland_sfcphy_offline.f90 \
            pvland_offline_main.f90
 
 SOURCES  = $(CORE_SRC) $(LIB_SRC) $(OFF_SRC)

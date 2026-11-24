@@ -7,17 +7,18 @@
 !######   - read the measured forcing (CSV)                  ######
 !######   - build a single-column ARPS-like atmospheric state ######
 !######   - INIT_PVLAND, then one call of the ARPS PV-LAND    ######
-!######     block (pvland_sfcphy_offline) per dtsfc step     ######
+!######     surface step (pvland_sfcphy) per dtsfc step      ######
 !######   - write the CSV outputs                            ######
 !######                                                      ######
 !##################################################################
 !##################################################################
 !
-!  The PV-LAND physics (core/) and the ARPS routines (arps_lib/) are
-!  copies of the ARPS sources, offline/pvland_sfcphy_offline.f90 is
-!  generated from the ARPS sfcphy3d.f90 PV-LAND block
-!  (see scripts/sync_from_arps.py). Only this file and
+!  The PV-LAND physics (core/, including the surface step pvland_sfcphy
+!  of pvland_driver.f90) and the ARPS routines (arps_lib/) are copies of
+!  the ARPS sources (see scripts/sync_from_arps.py). Only this file and
 !  offline/pvland_park_map.f90 are specific to the offline model.
+!  pvland_sfcphy is called with meas_opt = 1: diffuse SW, sun angles in
+!  the park frame and Obukhov length are taken from the measurements.
 !
 !  Usage:  ./pv_land.exe [forcing.csv]
 !          default forcing file: recorded_data_adjusted_daily_summer_2025.csv
@@ -31,6 +32,9 @@ PROGRAM pvland_offline_main
 
   USE module_pvland_in,  ONLY : h_PV
   USE module_pvland_out
+  USE pvland_sfcphy_work, ONLY : uref_diag => uref,                    &
+                                 cdh_can_diag => cdh_can,              &
+                                 cdh_PVa_diag => cdh_PVa
 
   IMPLICIT NONE
 
@@ -97,12 +101,10 @@ PROGRAM pvland_offline_main
   REAL :: cdm(nx,ny), cdh(nx,ny), cdq(nx,ny)
   REAL :: usflx(nx,ny), vsflx(nx,ny), ptsflx(nx,ny), qvsflx(nx,ny)
   REAL :: tem1(nx,ny)
+  REAL :: pt1(nx,ny), tair(nx,ny), qvair(nx,ny)   ! set by pvland_sfcphy
 
   ! ====== Measured forcing replacing ARPS diagnostics ======
   REAL :: S_diffuse_in(nx,ny), lambda_in(nx,ny), phi_in(nx,ny), L_obk_in(nx,ny)
-
-  ! ====== Offline diagnostics ======
-  REAL :: uref_diag(nx,ny), cdh_can_diag(nx,ny), cdh_PVa_diag(nx,ny)
 
   !=====================================================================
   ! INITIALIZATION
@@ -250,14 +252,14 @@ PROGRAM pvland_offline_main
       CALL set_atmosphere(temp, temp+1, frac)
       nstep = nstep + 1
 
-      CALL pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
+      CALL pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                       &
            u,v,w,ptprt,pprt,qv,ptbar,pbar,qvbar,zp,prcrate,            &
            soiltyp,stypfrct,vegtyp,lai,roufns,veg,                      &
            tsoil,qsoil,wetcanp,snowdpth,qvsfc,                          &
            radsw,rnflx,radlwin,psfc,rhosfc,0.0,                         &
            cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
-           S_diffuse_in,lambda_in,phi_in,L_obk_in,                      &
-           uref_diag,cdh_can_diag,cdh_PVa_diag)
+           pt1,tair,qvair,                                              &
+           1,S_diffuse_in,lambda_in,phi_in,L_obk_in)
     END DO
 
     !-------------------------------------------------------------------

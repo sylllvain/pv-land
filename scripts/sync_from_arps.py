@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Synchronise the PV-LAND offline model with the ARPS PV-LAND sources.
 
-ARPS is the reference:
-  - core/ and arps_lib/ are exact copies of ARPS files (or of complete
-    subroutines extracted from ARPS files);
-  - offline/pvland_sfcphy_offline.f90 is generated from the PV-LAND block of
-    ARPS sfcphy3d.f90 (sfcphy == 5) inserted into the template
-    scripts/pvland_sfcphy_offline.tmpl.f90, with a few lines tagged [OFFLINE].
-These files must never be edited by hand here: edit ARPS (or the template),
-then re-run this script.
+ARPS is the reference: core/ and arps_lib/ are exact copies of ARPS files
+(or of complete subroutines extracted from ARPS files). core/ includes
+pvland_driver.f90 (SUBROUTINE pvland_sfcphy), the PV-LAND surface step
+called both by ARPS sfcphy3d.f90 (sfcphy == 5) and by the offline model.
+These files must never be edited by hand here: edit ARPS, then re-run
+this script.
 
 Usage (from the PV-LAND directory):
     python3 scripts/sync_from_arps.py            # copy/generate from ARPS
@@ -26,6 +24,7 @@ import sys
 CORE_FILES = [
     "module_pvland.f90",
     "pvland.f90",
+    "pvland_driver.f90",
     "pvland_profil.f90",
     "pvland_view_factors.f90",
     "pvland_solar_radiation.f90",
@@ -53,11 +52,6 @@ INCLUDE_FILES = [
     "soilcst.inc",
     "grid.inc",
 ]
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-STEP_TEMPLATE = os.path.join(HERE, "pvland_sfcphy_offline.tmpl.f90")
-STEP_MARKER = "!@@ARPS_SFCPHY5_BLOCK@@\n"
-
 
 def read(path):
     return open(path, encoding="latin-1").read()
@@ -90,58 +84,6 @@ def extract_subroutines(path, names):
     return "".join(out)
 
 
-def comment_out(text):
-    """Comment out every non-empty line (keeps the original ARPS code visible)."""
-    return "".join(("!" + line[1:] if line[:1] == " " else "!" + line) if line.strip() else line
-                   for line in text.splitlines(keepends=True))
-
-
-def make_offline_step(sfcphy_path):
-    """Offline driver = ARPS sfcphy==5 block + lines tagged [OFFLINE]."""
-    lines = read(sfcphy_path).splitlines(keepends=True)
-    try:
-        i0 = next(i for i, l in enumerate(lines)
-                  if re.match(r"\s*ELSE IF \( sfcphy == 5 \) THEN", l)) + 1
-        i1 = next(i for i, l in enumerate(lines)
-                  if i > i0 and "DEALLOCATE(lambda_deg,phi_deg)" in l)
-    except StopIteration:
-        sys.exit(f"ERROR: PV-LAND block (sfcphy == 5) not found in {sfcphy_path}")
-    body = "".join(lines[i0:i1 + 1])
-
-    def substitute(pattern, new_lines, keep_old=True):
-        nonlocal body
-        found = re.findall(pattern, body, re.S)
-        if len(found) != 1:
-            sys.exit(f"ERROR: ARPS PV-LAND block changed, cannot find exactly once:\n  {pattern}\n"
-                     f"  -> update make_offline_step() in {__file__}")
-        old = found[0]
-        body = body.replace(old, (comment_out(old) if keep_old else "") + new_lines)
-
-    # 1. direct/diffuse split of SW -> measured diffuse SW
-    substitute(r"( *! split solar radiation between direct and diffuse\n"
-               r" *CALL split_sw\(.*?1367\.\)\n)",
-               "      S_diffuse(i,j) = S_diffuse_in(i,j)                 ! [OFFLINE] measured diffuse SW\n"
-               "      S_direct(i,j)  = radsw(i,j) - S_diffuse(i,j)       ! [OFFLINE]\n")
-    # 2. solar angles in the park frame -> measured lambda, phi (rad)
-    substitute(r"( *call compute_lambda_phi\(szenith_deg[^\n]*\n)",
-               "      lambda_deg(i,j) = lambda_in(i,j) * 180. / pi       ! [OFFLINE] measured, park frame\n"
-               "      phi_deg(i,j)    = phi_in(i,j)    * 180. / pi       ! [OFFLINE] measured, park frame\n")
-    # 3. Obukhov length from the surface fluxes -> measured Obukhov length
-    substitute(r"(\s*if \(ptsflx\(i,j\)\.ne\.0\.\) then\n.*?endif\n)",
-               "      L_obk(i,j) = L_obk_in(i,j)                         ! [OFFLINE] measured Obukhov length\n")
-    # 4. save local diagnostics at the end of the block
-    substitute(r"(\n *END DO  ! loop over is\n)",
-               "\n    END DO  ! loop over is\n\n"
-               "  uref_diag    = uref        ! [OFFLINE DIAG]\n"
-               "  cdh_can_diag = cdh_can     ! [OFFLINE DIAG]\n"
-               "  cdh_PVa_diag = cdh_PVa     ! [OFFLINE DIAG]\n", keep_old=False)
-
-    template = read(STEP_TEMPLATE)
-    if template.count(STEP_MARKER) != 1:
-        sys.exit(f"ERROR: marker {STEP_MARKER.strip()} not found in {STEP_TEMPLATE}")
-    return template.replace(STEP_MARKER, body)
-
-
 def targets(arps):
     """Yield (destination, expected text) for every synchronised file."""
     src = os.path.join(arps, "src", "arps")
@@ -154,8 +96,6 @@ def targets(arps):
         yield os.path.join("arps_lib", out), extract_subroutines(os.path.join(src, f), names)
     for f in INCLUDE_FILES:
         yield os.path.join("arps_lib", "include", f), read(os.path.join(inc, f))
-    yield (os.path.join("offline", "pvland_sfcphy_offline.f90"),
-           make_offline_step(os.path.join(src, "sfcphy3d.f90")))
 
 
 def main():
@@ -195,7 +135,7 @@ def main():
         if ndiff:
             print(f"{ndiff} file(s) differ from ARPS ({args.arps}).")
             sys.exit(1)
-        print(f"OK: core/, arps_lib/ and offline/pvland_sfcphy_offline.f90 match ARPS ({args.arps}).")
+        print(f"OK: core/ and arps_lib/ match ARPS ({args.arps}).")
     elif ndiff == 0:
         print("Nothing to update: already identical to ARPS.")
 

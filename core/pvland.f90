@@ -58,8 +58,6 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   INTEGER :: i, j
   REAL :: beta_deg,theta_0_deg,psfc
   REAL, PARAMETER :: pi = 3.14159265359
-  REAL :: coef(8)              ! albedo or 1-emissivity of the 8 surfaces
-  INTEGER :: info_rad
 !
 !-----------------------------------------------------------------------
 !
@@ -141,31 +139,16 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   emiss_PVf = 0.79   ! PV front emissivity
   emiss_PVb = 0.80   ! PV back emissivity
   
-  ! Geometry
+  ! Geometry: tilt and orientation. The quantities derived from the tilt
+  ! (h_clear, width, lambda_f_park, z_can, z_PVa, view factors) are
+  ! computed in pvland_geometry, called below.
   beta = beta_deg * pi / 180.0
-  h_clear = h_PV - L * SIN(beta)
-  width = L * COS(beta)
   theta_0 = theta_0_deg * pi / 180.0
-  
-  ! Park-scale roughness: compute lambda_f once (geometry-only)
-  DO j=1,ny
-  DO i=1,nx
-  CALL compute_lambda_f(a(i,j), L(i,j), beta(i,j), lambda_f_park(i,j))
-  ENDDO
-  ENDDO
-  
-  
-  ! Heights for wind profile
-  z_can = (h_PV + h_clear) / 4.0
 
   ! Interface lengths for neutral drag coefficient calculations
-  l_nat_can  = z_can       ! Eq. 6.3-6.5: natural ground to canopy air
+  ! (l_nat_can = z_can is set in pvland_geometry)
   l_PVb_can  = 0.015        ! Eq. 6.7-6.9: PV back to canopy air
   l_PVf_PVa  = 0.015         ! Eq. 6.11-6.13: PV front to air above PV
-
-  ! z_PVa derived from Eq. 6.15: l_PVa_ref = z_ref - z_PVa
-  ! where z_PVa = (h_PV+h_clear)/2 + l_PVf*cos(beta)
-  z_PVa = (h_PV + h_clear) / 2.0 + l_PVf_PVa * COS(beta)
   
   ! Get PV thermal parameters
   DO j=1,ny
@@ -181,34 +164,20 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
 
   ! ====== Radiosity model: temperature-independent quantities ======
   ! View factors and LU factorisations of the SW and LW radiosity
-  ! matrices depend on geometry and optical properties only: computed
-  ! once here instead of at every call of compute_all_forcings.
-  ! Surfaces: 1=nat_n, 2=PVf_n, 3=PVb_n, 4=PVb_{n-1}, 5=PVf_{n-1},
-  !           6=PVb_{n+1}, 7=nat_{n-1}, 8=nat_{n+1}          [SYLVAIN]
+  ! matrices depend on geometry and optical properties only.
+  !   vf_update_opt = 0 : computed once here (fixed panels)
+  !   vf_update_opt = 1 : recomputed at every PV-LAND time step
+  !                       (pvland_sfcphy), for moving panels, e.g. sun
+  !                       tracking: beta may then change in time.  [SYLVAIN]
+  vf_update_opt = 0
+
   ALLOCATE(F_pv(nsurf_pv,nsurf_pv,nx,ny), Fsky_pv(nsurf_pv,nx,ny))
   ALLOCATE(LU_SW_pv(nsurf_pv,nsurf_pv,nx,ny), LU_LW_pv(nsurf_pv,nsurf_pv,nx,ny))
   ALLOCATE(ipiv_SW_pv(nsurf_pv,nx,ny), ipiv_LW_pv(nsurf_pv,nx,ny))
   ALLOCATE(sw_valid(nx,ny), sw_key(4,nx,ny))
   ALLOCATE(J_SW_pv(nsurf_pv,nx,ny), G_SW_pv(nsurf_pv,nx,ny), q_SW_pv(nsurf_pv,nx,ny))
-  sw_valid(:,:) = .FALSE.
 
-  DO j=1,ny-1
-  DO i=1,nx-1
-    CALL compute_view_factor_matrix(L(i,j), a(i,j), width(i,j), h_PV(i,j), beta(i,j), &
-                                    F_pv(:,:,i,j))
-    CALL compute_sky_view_factors(F_pv(:,:,i,j), Fsky_pv(:,i,j))
-
-    coef = (/ albedo_nat(i,j), albedo_PVf(i,j), albedo_PVb(i,j), albedo_PVb(i,j), &
-              albedo_PVf(i,j), albedo_PVb(i,j), albedo_nat(i,j), albedo_nat(i,j) /)
-    CALL factor_radiosity_matrix(nsurf_pv, coef, F_pv(:,:,i,j), &
-                                 LU_SW_pv(:,:,i,j), ipiv_SW_pv(:,i,j), info_rad)
-
-    coef = 1.0 - (/ emiss_nat(i,j), emiss_PVf(i,j), emiss_PVb(i,j), emiss_PVb(i,j), &
-                    emiss_PVf(i,j), emiss_PVb(i,j), emiss_nat(i,j), emiss_nat(i,j) /)
-    CALL factor_radiosity_matrix(nsurf_pv, coef, F_pv(:,:,i,j), &
-                                 LU_LW_pv(:,:,i,j), ipiv_LW_pv(:,i,j), info_rad)
-  ENDDO
-  ENDDO
+  CALL pvland_geometry(nx,ny)
                         
     DO j=1,ny-1
       DO i=1,nx-1
@@ -241,6 +210,93 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
     
   RETURN
 END SUBROUTINE init_pvland
+
+!##################################################################
+!##################################################################
+!######                                                      ######
+!######                SUBROUTINE PVLAND_GEOMETRY            ######
+!######                                                      ######
+!##################################################################
+!##################################################################
+
+SUBROUTINE pvland_geometry(nx,ny)
+!
+!-----------------------------------------------------------------------
+!
+!  PURPOSE:
+!
+!  Quantities of the PV park that depend on the panel tilt beta:
+!    - h_clear, width, lambda_f_park, z_can, l_nat_can, z_PVa
+!      (h_PV, the height of the panel top edge, is kept fixed);
+!    - view factors F_pv, sky view factors Fsky_pv and LU factorisations
+!      of the SW and LW radiosity matrices (module pvland_rad_cache).
+!  The cached SW solution is invalidated.
+!
+!  Called once by INIT_PVLAND, and at every PV-LAND time step by
+!  pvland_sfcphy when vf_update_opt = 1 (moving panels).
+!
+!  Surfaces: 1=nat_n, 2=PVf_n, 3=PVb_n, 4=PVb_{n-1}, 5=PVf_{n-1},
+!            6=PVb_{n+1}, 7=nat_{n-1}, 8=nat_{n+1}
+!
+!  AUTHOR: moved from INIT_PVLAND  [SYLVAIN]
+!
+!-----------------------------------------------------------------------
+!
+  USE module_pvland_in
+  USE pvland_rad_cache
+
+  IMPLICIT NONE
+
+  INTEGER :: nx,ny
+
+  INTEGER :: i, j
+  REAL :: coef(8)              ! albedo or 1-emissivity of the 8 surfaces
+  INTEGER :: info_rad
+
+  h_clear = h_PV - L * SIN(beta)
+  width = L * COS(beta)
+  
+  ! Park-scale roughness: frontal area density (geometry-only)
+  DO j=1,ny
+  DO i=1,nx
+  CALL compute_lambda_f(a(i,j), L(i,j), beta(i,j), lambda_f_park(i,j))
+  ENDDO
+  ENDDO
+  
+  ! Heights for wind profile
+  z_can = (h_PV + h_clear) / 4.0
+
+  ! Eq. 6.3-6.5: natural ground to canopy air
+  l_nat_can  = z_can
+
+  ! z_PVa derived from Eq. 6.15: l_PVa_ref = z_ref - z_PVa
+  ! where z_PVa = (h_PV+h_clear)/2 + l_PVf*cos(beta)
+  z_PVa = (h_PV + h_clear) / 2.0 + l_PVf_PVa * COS(beta)
+
+  ! View factors and LU factorisations of the radiosity matrices
+  DO j=1,ny-1
+  DO i=1,nx-1
+    CALL compute_view_factor_matrix(L(i,j), a(i,j), width(i,j), h_PV(i,j), beta(i,j), &
+                                    F_pv(:,:,i,j))
+    CALL compute_sky_view_factors(F_pv(:,:,i,j), Fsky_pv(:,i,j))
+
+    coef = (/ albedo_nat(i,j), albedo_PVf(i,j), albedo_PVb(i,j), albedo_PVb(i,j), &
+              albedo_PVf(i,j), albedo_PVb(i,j), albedo_nat(i,j), albedo_nat(i,j) /)
+    CALL factor_radiosity_matrix(nsurf_pv, coef, F_pv(:,:,i,j), &
+                                 LU_SW_pv(:,:,i,j), ipiv_SW_pv(:,i,j), info_rad)
+
+    coef = 1.0 - (/ emiss_nat(i,j), emiss_PVf(i,j), emiss_PVb(i,j), emiss_PVb(i,j), &
+                    emiss_PVf(i,j), emiss_PVb(i,j), emiss_nat(i,j), emiss_nat(i,j) /)
+    CALL factor_radiosity_matrix(nsurf_pv, coef, F_pv(:,:,i,j), &
+                                 LU_LW_pv(:,:,i,j), ipiv_LW_pv(:,i,j), info_rad)
+  ENDDO
+  ENDDO
+
+  ! the SW solution depends on the geometry: recompute it at the next call
+  sw_valid(:,:) = .FALSE.
+
+  RETURN
+END SUBROUTINE pvland_geometry
 
 !
 !##################################################################
