@@ -403,6 +403,7 @@ SUBROUTINE soilebm(nx,ny,nz,soiltyp,vegtyp,lai,veg,                     &
   REAL :: runoff      ! Runoff of the interception reservoir.
   REAL :: pnet        ! Residual of precip. and evap.
   REAL :: vegp        ! Precip. intercepted by vegetation
+  REAL :: f3 !modif sylvain
 
   INTEGER :: i, j, it
 
@@ -438,18 +439,40 @@ SUBROUTINE soilebm(nx,ny,nz,soiltyp,vegtyp,lai,veg,                     &
     DO i = 1, nx-1
 !      f34(i,j) = MAX( 0., 1.0 - 0.0016 * (298.0-tair(i,j))**2 )
 
-       IF (tair(i,j) >= 302.15) THEN                    !(XP2001) 
+! modif sylvain
+       ! f3: stomatal response to VPD
+      IF (qvsata(i,j) - qvair(i,j) <= 12.5) THEN
+        f3 = 1.0 - 0.06*(qvsata(i,j) - qvair(i,j))
+      ELSE
+        f3 = 0.25
+      END IF
+! fin modif sylvain
+
+      ! f4: stomatal response to temperature
+      IF (tair(i,j) >= 302.15) THEN                    !(XP2001) 
          f34(i,j) = 1.0 / (1.0 + EXP( 1.18 * (tair(i,j)-314.00)))
        ELSE
          f34(i,j) = 1.0 / (1.0 + EXP( -0.41* (tair(i,j)-282.05)))
        ENDIF 
 
+! modif sylvain
+      ! f3: stomatal response to VPD
+      !VPD_kPa = (qvsata(i,j) - qvref(i,j)) * psfc(i,j) / 622.0
+
+      ! Hyperbolic formulation (Kim & Verma, 1991)
+      !f3 = 1.0 / (1.0 + 0.13 * VPD_kPa)
+
+
+      f34(i,j) = f34(i,j) * f3
+! fin modif sylvain
+
     END DO
     END DO
   END IF
 
-  jday_min = 61       ! may change with latitude
-  relief=tsoil_offset_amplitude*sin((jday-jday_min)/365.0*2.0*PI)
+  !jday_min = 61       ! may change with latitude
+  !relief=tsoil_offset_amplitude*sin((jday-jday_min)/365.0*2.0*PI)
+  relief=0. !modif sylvain
 
 !
 !-----------------------------------------------------------------------
@@ -591,10 +614,10 @@ SUBROUTINE soilebm(nx,ny,nz,soiltyp,vegtyp,lai,veg,                     &
           * ( wsat(soiltyp(i,j))/tema )                               &
           **( bslope(soiltyp(i,j))/log100 )
 
-!      ct(i,j) = cg * cgv / ( (1.0-veg(i,j)) * cgv                     &
-!                           + veg(i,j) * cg )       ! NP, Eq. 8
+      ct(i,j) = cg * cgv / ( (1.0-veg(i,j)) * cgv                     &
+                           + veg(i,j) * cg )       ! NP, Eq. 8
 
-      ct(i,j) = cg                                  !(PX1995) 
+ !     ct(i,j) = cg                                  !(PX1995) !modif sylvain
 
       gflx(i,j) = 2.0*pi*(tsfc(i,j)-tdeep(i,j)-relief)/(tau*ct(i,j))
                                         ! Ground diffusive heat flux
@@ -777,9 +800,6 @@ SUBROUTINE soilebm_frc(nx,ny,nz,soiltyp,vegtyp,lai,veg,           &
         cg = cgsat(soiltyp(i,j))                                      &
             * ( wsat(soiltyp(i,j))/tema )                             &
             **( bslope(soiltyp(i,j))/log100 )
-        ! Test
-        !cgv = 2E-05    
-            
         ct(i,j) = cg * cgv / ( (1.0-veg(i,j)) * cgv + veg(i,j) * cg )     
         gflx(i,j) = 2.0*pi*(tsfc(i,j)-tdeep(i,j)-relief)/(tau*ct(i,j))
       END IF
@@ -1327,7 +1347,7 @@ SUBROUTINE evapflx(nx,ny, radsw, f34, cdqa,                             &
   END DO
 
   RETURN
-END SUBROUTINE evapflx  
+END SUBROUTINE evapflx   
 
 !
 !##################################################################

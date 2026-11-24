@@ -130,6 +130,7 @@ SUBROUTINE pv_land(nx, ny, nz, nzsoil, nstyps, &
   REAL :: u_star_ref, Uplus
   REAL :: L_obk            ! Obukhov length used in the wind profile [m]
   REAL :: z_can, z_PVa, z_ref
+  REAL :: pt1(nx,ny)       ! potential temperature at the reference level (as in ARPS)
   
   ! Drag coefficients (calculated with current temperatures)
   REAL :: cdm_nat(nx,ny), cdh_nat(nx,ny), cdq_nat(nx,ny)
@@ -271,7 +272,8 @@ SUBROUTINE pv_land(nx, ny, nz, nzsoil, nstyps, &
   zpsoil(:,:,2) = 10
   
   ! Heights for wind profile
-  z_ref = 0.5 * zp(1,1,3)
+  !z_ref = 0.5 * zp(1,1,3)
+  z_ref = zp(1,1,2) + 0.5*(zp(1,1,3)-zp(1,1,2))   ! as in ARPS (DRAG_PVLAND)  [SYLVAIN]
   z_can = (h_PV + h_clear) / 4.0
 
   ! Interface lengths for neutral drag coefficient calculations
@@ -342,6 +344,7 @@ SUBROUTINE pv_land(nx, ny, nz, nzsoil, nstyps, &
     qvbar(:,:,:) = qvref(1,1)
     qv(:,:,:) = qvref(1,1)
     rhostr(:,:,:) = rhosfc(1,1)
+    pt1(:,:) = ptbar(:,:,2) + ptprt(:,:,2)   ! as in ARPS (sfcphy3d.f90)  [SYLVAIN]
     
     u_wind(:,:,:) = uref(1,1) * SIN(udir(1,1) * pi / 180.0)
     v_wind(:,:,:) = uref(1,1) * COS(udir(1,1) * pi / 180.0)
@@ -549,7 +552,7 @@ SUBROUTINE pv_land(nx, ny, nz, nzsoil, nstyps, &
     
     CALL dragcoef(nx, ny, nz, zp_dc, &
                  pt_can, qvref, soiltyp_dummy, z0_park_arr, &
-                 wdspsfc, ptbar(:,:,2), &
+                 wdspsfc, pt1, &
                  cdm_can, cdh_can, cdq_can)
                  
     facteur = 10
@@ -565,7 +568,7 @@ SUBROUTINE pv_land(nx, ny, nz, nzsoil, nstyps, &
     
     CALL dragcoef(nx, ny, nz, zp_dc, &
                  pt_PVa, qvref, soiltyp_dummy, z0_park_arr, &
-                 wdspsfc, ptbar(:,:,2), &
+                 wdspsfc, pt1, &
                  cdm_PVa, cdh_PVa, cdq_PVa)
     
     facteur = 10

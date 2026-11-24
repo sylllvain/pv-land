@@ -411,7 +411,8 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, nstyps, &
   frc_soil = frc_tdeep
   
   ! Extract output fluxes
-  H_nat_out(1,1)  = -cp * ptsflx_nat(1,1)
+  !H_nat_out(1,1)  = -cp * ptsflx_nat(1,1)
+  H_nat_out(1,1)  = shflx(1,1)   ! comme dans ARPS : flux de soilebm_frc  [SYLVAIN]
   LE_nat_out(1,1) = lhflx(1,1)
   G_nat_out = gflx
   
