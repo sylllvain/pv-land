@@ -129,12 +129,12 @@ def make_offline_step(sfcphy_path):
     # 3. Obukhov length from the surface fluxes -> measured Obukhov length
     substitute(r"(\s*if \(ptsflx\(i,j\)\.ne\.0\.\) then\n.*?endif\n)",
                "      L_obk(i,j) = L_obk_in(i,j)                         ! [OFFLINE] measured Obukhov length\n")
-    # 4. save local diagnostics before they are deallocated
-    substitute(r"(  DEALLOCATE\(cdm_u,cdm_v,z0_PV\)\n)",
+    # 4. save local diagnostics at the end of the block
+    substitute(r"(\n *END DO  ! loop over is\n)",
+               "\n    END DO  ! loop over is\n\n"
                "  uref_diag    = uref        ! [OFFLINE DIAG]\n"
                "  cdh_can_diag = cdh_can     ! [OFFLINE DIAG]\n"
-               "  cdh_PVa_diag = cdh_PVa     ! [OFFLINE DIAG]\n\n"
-               "  DEALLOCATE(cdm_u,cdm_v,z0_PV)\n", keep_old=False)
+               "  cdh_PVa_diag = cdh_PVa     ! [OFFLINE DIAG]\n", keep_old=False)
 
     template = read(STEP_TEMPLATE)
     if template.count(STEP_MARKER) != 1:

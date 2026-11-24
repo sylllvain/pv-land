@@ -98,8 +98,74 @@ SUBROUTINE solve_SW_radiosities(N, alpha, F, F_sky, S_direct, &
   
   ! Solution is now in b
   J_SW = b
-  
+
 END SUBROUTINE solve_SW_radiosities
+
+
+SUBROUTINE factor_radiosity_matrix(N, coef, F, LU, ipiv, info)
+!-----------------------------------------------------------------------
+! LU factorisation (LAPACK SGETRF) of the radiosity matrix
+!   A = I - diag(coef) x F
+! with coef = albedo for SW and coef = 1 - emissivity for LW.
+! A depends on the geometry and optical properties only: it is
+! factorised once (INIT_PVLAND) and then used by solve_*_radiosities_lu,
+! which gives exactly the same result as SGESV (= SGETRF + SGETRS).
+! [SYLVAIN]
+!-----------------------------------------------------------------------
+  IMPLICIT NONE
+  INTEGER, INTENT(IN)  :: N
+  REAL,    INTENT(IN)  :: coef(N), F(N,N)
+  REAL,    INTENT(OUT) :: LU(N,N)
+  INTEGER, INTENT(OUT) :: ipiv(N), info
+  INTEGER :: i, j
+
+  LU = 0.0
+  DO i = 1, N
+    LU(i,i) = 1.0
+  END DO
+  DO i = 1, N
+    DO j = 1, N
+      LU(i,j) = LU(i,j) - coef(i) * F(i,j)
+    END DO
+  END DO
+
+  CALL SGETRF(N, N, LU, N, ipiv, info)
+
+  IF (info /= 0) THEN
+    PRINT *, 'ERROR in factor_radiosity_matrix: SGETRF failed with info=', info
+  END IF
+
+END SUBROUTINE factor_radiosity_matrix
+
+
+SUBROUTINE solve_SW_radiosities_lu(N, alpha, LU, ipiv, F_sky, S_direct, &
+                                   S_diffuse, J_SW, info)
+!-----------------------------------------------------------------------
+! Same as solve_SW_radiosities, but with the matrix I - diag(alpha) F
+! already factorised by factor_radiosity_matrix.  [SYLVAIN]
+!-----------------------------------------------------------------------
+  IMPLICIT NONE
+  INTEGER, INTENT(IN)  :: N
+  REAL,    INTENT(IN)  :: alpha(N), LU(N,N), F_sky(N)
+  INTEGER, INTENT(IN)  :: ipiv(N)
+  REAL,    INTENT(IN)  :: S_direct(N), S_diffuse
+  REAL,    INTENT(OUT) :: J_SW(N)
+  INTEGER, INTENT(OUT) :: info
+  INTEGER :: i
+
+  ! Right-hand side b = diag(alpha) x [S_direct + F_sky x S_diffuse]
+  DO i = 1, N
+    J_SW(i) = alpha(i) * (S_direct(i) + F_sky(i) * S_diffuse)
+  END DO
+
+  CALL SGETRS('N', N, 1, LU, N, ipiv, J_SW, N, info)
+
+  IF (info /= 0) THEN
+    PRINT *, 'ERROR in solve_SW_radiosities_lu: SGETRS failed with info=', info
+    J_SW = 0.0
+  END IF
+
+END SUBROUTINE solve_SW_radiosities_lu
 
 
 SUBROUTINE compute_SW_irradiances(N, F, F_sky, S_direct, S_diffuse, &

@@ -90,28 +90,29 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
   REAL :: qvair  (nx,ny)    ! Specific humidity of surface air
 
   REAL :: z_ref,usuf,vsuf,Uplus
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdm_u,cdm_v
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: z0_PV
+  ! PV-LAND work arrays: SAVE, allocated at the first call only (as in ARPS)
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdm_u,cdm_v
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: z0_PV
 
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: uref,T_nat,T_soil,qsoil_surf,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: uref,T_nat,T_soil,qsoil_surf,&
 	qsoil_deep,S_diffuse,S_direct,wrmax
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_nat,cdq_nat,cdm_nat
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVa,cdq_PVa,cdm_PVa
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVb,cdq_PVb,cdm_PVb
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVf,cdq_PVf,cdm_PVf
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_can,cdq_can,cdm_can
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: L_obk
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_nat,cdq_nat,cdm_nat
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVa,cdq_PVa,cdm_PVa
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVb,cdq_PVb,cdm_PVb
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVf,cdq_PVf,cdm_PVf
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_can,cdq_can,cdm_can
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: L_obk
 
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
 	rhs_PVb,rhs_wsfc,rhs_wdp,rhs_wcnp
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: frc_nat,frc_soil,frc_PVf,frc_cell,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: frc_nat,frc_soil,frc_PVf,frc_cell,&
 	frc_PVb,frc_wsfc,frc_wdp,frc_wcnp
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: T_nat_half,T_soil_half,T_PVf_half,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: T_nat_half,T_soil_half,T_PVf_half,&
 	T_cell_half,T_PVb_half,qsoil_surf_half,qsoil_deep_half
-  REAL, ALLOCATABLE, DIMENSION (:,:,:) :: wetcanp_half
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:,:) :: wetcanp_half
 
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: SW_out_sky_loc, LW_out_sky_loc
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: dum_qLW_PVf, dum_qLW_PVb, &
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: SW_out_sky_loc, LW_out_sky_loc
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: dum_qLW_PVf, dum_qLW_PVb, &
                              dum_H_PVf, dum_H_PVb, &
                              dum_qcond_PVf, dum_qcond_PVb, &
                              dum_qSW_PVf, dum_qSW_PVb, &
@@ -121,7 +122,7 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
                              dum_JLW_PVf, dum_JLW_PVb, &
                              dum_G_SW_nat, dum_J_SW_nat, &
                              dum_G_LW_nat, dum_J_LW_nat
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: lambda_deg,phi_deg
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: lambda_deg,phi_deg
 
   INTEGER :: i, j, k, is
   REAL :: tema

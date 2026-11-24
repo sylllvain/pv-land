@@ -99,36 +99,35 @@ SUBROUTINE compute_f_ground(L, a, beta, h_PV, lambda, phi, f_nat)
   s_max = MAX(x_bot, x_top)
 
   !-------------------------
-  ! Integration (Union of Intervals)
+  ! Visibility factor (exact union of intervals)
   !-------------------------
-  ! We count how many samples of the ground period [0, period] 
-  ! are NOT covered by the shadow of any row n in [-3, 3]
-  shaded_count = 0
-  
-  DO i = 0, num_samples - 1
-     ! Position of the ground sample
-     x_sample = (REAL(i) / REAL(num_samples - 1)) * period
-     is_shaded = .FALSE.
-     
-     ! Check against each neighbor n
-     DO n = -3, 3
-        s_min_n = s_min + REAL(n) * period
-        s_max_n = s_max + REAL(n) * period
-        
-        IF (x_sample >= s_min_n .AND. x_sample <= s_max_n) THEN
-           is_shaded = .TRUE.
-           EXIT ! Point is in shadow, no need to check other rows
-        END IF
-     END DO
-     
-     IF (is_shaded) shaded_count = shaded_count + 1
-  END DO
+  ! Each row casts on the ground a shadow [s_min, s_max] of length
+  ! s_max - s_min, repeated with the array period. The shaded fraction
+  ! of one ground period is therefore exactly MIN(1, (s_max-s_min)/period),
+  ! whatever the shadow offset. This replaces the former sampling of
+  ! 10000 points x 7 rows (same result to 1e-4, ~86% of the PV-LAND
+  ! CPU time), which also missed shadows shifted by more than 3 periods
+  ! when the sun is very low.  [SYLVAIN]
+  f_nat = 1.0 - MIN(1.0, (s_max - s_min) / period)
 
   !-------------------------
-  ! Visibility factor
+  ! Former sampling method, kept for reference
   !-------------------------
-  ! f_nat = (Total samples - shaded samples) / Total samples
-  f_nat = REAL(num_samples - shaded_count) / REAL(num_samples)
+  ! shaded_count = 0
+  ! DO i = 0, num_samples - 1
+  !    x_sample = (REAL(i) / REAL(num_samples - 1)) * period
+  !    is_shaded = .FALSE.
+  !    DO n = -3, 3
+  !       s_min_n = s_min + REAL(n) * period
+  !       s_max_n = s_max + REAL(n) * period
+  !       IF (x_sample >= s_min_n .AND. x_sample <= s_max_n) THEN
+  !          is_shaded = .TRUE.
+  !          EXIT
+  !       END IF
+  !    END DO
+  !    IF (is_shaded) shaded_count = shaded_count + 1
+  ! END DO
+  ! f_nat = REAL(num_samples - shaded_count) / REAL(num_samples)
 
 END SUBROUTINE compute_f_ground
 

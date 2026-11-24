@@ -90,28 +90,29 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
   REAL :: qvair  (nx,ny)    ! Specific humidity of surface air
 
   REAL :: z_ref,usuf,vsuf,Uplus
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdm_u,cdm_v
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: z0_PV
+  ! PV-LAND work arrays: SAVE, allocated at the first call only (as in ARPS)
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdm_u,cdm_v
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: z0_PV
 
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: uref,T_nat,T_soil,qsoil_surf,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: uref,T_nat,T_soil,qsoil_surf,&
 	qsoil_deep,S_diffuse,S_direct,wrmax
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_nat,cdq_nat,cdm_nat
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVa,cdq_PVa,cdm_PVa
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVb,cdq_PVb,cdm_PVb
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_PVf,cdq_PVf,cdm_PVf
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: cdh_can,cdq_can,cdm_can
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: L_obk
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_nat,cdq_nat,cdm_nat
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVa,cdq_PVa,cdm_PVa
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVb,cdq_PVb,cdm_PVb
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_PVf,cdq_PVf,cdm_PVf
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: cdh_can,cdq_can,cdm_can
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: L_obk
 
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
 	rhs_PVb,rhs_wsfc,rhs_wdp,rhs_wcnp
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: frc_nat,frc_soil,frc_PVf,frc_cell,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: frc_nat,frc_soil,frc_PVf,frc_cell,&
 	frc_PVb,frc_wsfc,frc_wdp,frc_wcnp
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: T_nat_half,T_soil_half,T_PVf_half,&
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: T_nat_half,T_soil_half,T_PVf_half,&
 	T_cell_half,T_PVb_half,qsoil_surf_half,qsoil_deep_half
-  REAL, ALLOCATABLE, DIMENSION (:,:,:) :: wetcanp_half
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:,:) :: wetcanp_half
 
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: SW_out_sky_loc, LW_out_sky_loc
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: dum_qLW_PVf, dum_qLW_PVb, &
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: SW_out_sky_loc, LW_out_sky_loc
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: dum_qLW_PVf, dum_qLW_PVb, &
                              dum_H_PVf, dum_H_PVb, &
                              dum_qcond_PVf, dum_qcond_PVb, &
                              dum_qSW_PVf, dum_qSW_PVb, &
@@ -121,7 +122,7 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
                              dum_JLW_PVf, dum_JLW_PVb, &
                              dum_G_SW_nat, dum_J_SW_nat, &
                              dum_G_LW_nat, dum_J_LW_nat
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: lambda_deg,phi_deg
+  REAL, ALLOCATABLE, SAVE, DIMENSION (:,:) :: lambda_deg,phi_deg
 
   INTEGER :: i, j, k, is
   REAL :: tema
@@ -147,6 +148,8 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
 !-----------------------------------------------------------------------
 !
 
+  ! work arrays allocated at the first call only (SAVE)  [SYLVAIN]
+  IF (.NOT. ALLOCATED(cdm_u)) THEN
   ALLOCATE(cdm_u(nx,ny),cdm_v(nx,ny),z0_PV(nx,ny))
   ALLOCATE(uref(nx,ny), T_nat(nx,ny), T_soil(nx,ny), qsoil_surf(nx,ny), &
 	qsoil_deep(nx,ny),S_diffuse(nx,ny),S_direct(nx,ny),wrmax(nx,ny))
@@ -176,6 +179,7 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
                              dum_G_SW_nat(nx,ny), dum_J_SW_nat(nx,ny), &
                              dum_G_LW_nat(nx,ny), dum_J_LW_nat(nx,ny))
   ALLOCATE(lambda_deg(nx,ny),phi_deg(nx,ny))
+  END IF
 
 
     DO j=1,ny-1
@@ -231,7 +235,11 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
 !			L_obk(i,j) = -1000.
 !	endif
       L_obk(i,j) = L_obk_in(i,j)                         ! [OFFLINE] measured Obukhov length
- 
+	! Bound the instability: zeta = z_ref/L_obk >= -5, i.e. L_obk <= -z_ref/5
+	! when unstable (avoids a vanishing L_obk at weak wind).  [SYLVAIN]
+	z_ref = zp(i,j,2) + 0.5*(zp(i,j,3)-zp(i,j,2))
+	if (L_obk(i,j).lt.0.) L_obk(i,j) = MIN(L_obk(i,j), -z_ref/5.)
+
       ENDIF !pv_park
       
 
@@ -684,37 +692,38 @@ SUBROUTINE pvland_sfcphy_offline(nx,ny,nz,nzsoil,nstyps,               &
   cdh_can_diag = cdh_can     ! [OFFLINE DIAG]
   cdh_PVa_diag = cdh_PVa     ! [OFFLINE DIAG]
 
-  DEALLOCATE(cdm_u,cdm_v,z0_PV)
+  ! work arrays kept for the next call (SAVE)  [SYLVAIN]
+!  DEALLOCATE(cdm_u,cdm_v,z0_PV)
 
-  DEALLOCATE(uref, T_nat, T_soil, qsoil_surf, qsoil_deep, S_diffuse, &
-	S_direct, wrmax)
-  DEALLOCATE(cdh_nat,cdq_nat,cdm_nat)
-  DEALLOCATE(cdh_PVa,cdq_PVa,cdm_PVa)
-  DEALLOCATE(cdh_PVb,cdq_PVb,cdm_PVb)
-  DEALLOCATE(cdh_PVf,cdq_PVf,cdm_PVf)
-  DEALLOCATE(cdh_can,cdq_can,cdm_can)
-  DEALLOCATE(L_obk)
+!  DEALLOCATE(uref, T_nat, T_soil, qsoil_surf, qsoil_deep, S_diffuse, &
+!	S_direct, wrmax)
+!  DEALLOCATE(cdh_nat,cdq_nat,cdm_nat)
+!  DEALLOCATE(cdh_PVa,cdq_PVa,cdm_PVa)
+!  DEALLOCATE(cdh_PVb,cdq_PVb,cdm_PVb)
+!  DEALLOCATE(cdh_PVf,cdq_PVf,cdm_PVf)
+!  DEALLOCATE(cdh_can,cdq_can,cdm_can)
+!  DEALLOCATE(L_obk)
 
-  DEALLOCATE(rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
-	rhs_PVb,rhs_wsfc,rhs_wdp,rhs_wcnp)
-  DEALLOCATE(frc_nat,frc_soil,frc_PVf,frc_cell,&
-	frc_PVb,frc_wsfc,frc_wdp,frc_wcnp)
-  DEALLOCATE(T_nat_half,T_soil_half,T_PVf_half,&
-	T_cell_half,T_PVb_half,qsoil_surf_half,qsoil_deep_half,wetcanp_half)
+!  DEALLOCATE(rhs_nat,rhs_soil,rhs_PVf,rhs_cell,&
+!	rhs_PVb,rhs_wsfc,rhs_wdp,rhs_wcnp)
+!  DEALLOCATE(frc_nat,frc_soil,frc_PVf,frc_cell,&
+!	frc_PVb,frc_wsfc,frc_wdp,frc_wcnp)
+!  DEALLOCATE(T_nat_half,T_soil_half,T_PVf_half,&
+!	T_cell_half,T_PVb_half,qsoil_surf_half,qsoil_deep_half,wetcanp_half)
 	
-  DEALLOCATE(SW_out_sky_loc, LW_out_sky_loc)	
-  DEALLOCATE(dum_qLW_PVf, dum_qLW_PVb, &
-                             dum_H_PVf, dum_H_PVb, &
-                             dum_qcond_PVf, dum_qcond_PVb, &
-                             dum_qSW_PVf, dum_qSW_PVb, &
-                             dum_qPV, &
-                             dum_cdh_can, dum_cdh_PVa, &
-                             dum_T_can, dum_T_PVa, &
-                             dum_JLW_PVf, dum_JLW_PVb, &
-                             dum_G_SW_nat, dum_J_SW_nat, &
-                             dum_G_LW_nat, dum_J_LW_nat)
+!  DEALLOCATE(SW_out_sky_loc, LW_out_sky_loc)	
+!  DEALLOCATE(dum_qLW_PVf, dum_qLW_PVb, &
+!                             dum_H_PVf, dum_H_PVb, &
+!                             dum_qcond_PVf, dum_qcond_PVb, &
+!                             dum_qSW_PVf, dum_qSW_PVb, &
+!                             dum_qPV, &
+!                             dum_cdh_can, dum_cdh_PVa, &
+!                             dum_T_can, dum_T_PVa, &
+!                             dum_JLW_PVf, dum_JLW_PVb, &
+!                             dum_G_SW_nat, dum_J_SW_nat, &
+!                             dum_G_LW_nat, dum_J_LW_nat)
 
-  DEALLOCATE(lambda_deg,phi_deg)
+!  DEALLOCATE(lambda_deg,phi_deg)
 !=== END copy of ARPS sfcphy3d.f90, sfcphy == 5 block ==================
 
   RETURN

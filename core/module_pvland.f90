@@ -257,5 +257,38 @@ module rad_pvland
    implicit none
 
   REAL, ALLOCATABLE :: szenith_deg(:,:), sazimuth_deg(:,:)
-  
+
 end module rad_pvland
+
+!########################################################################
+!########################################################################
+!#########                                                      #########
+!#########             MODULE pvland_rad_cache                  #########
+!#########                                                      #########
+!########################################################################
+!########################################################################
+!
+! Quantities of the 8-surface radiosity model that do not depend on the
+! surface temperatures, computed once (INIT_PVLAND) or once per change
+! of the solar forcing (compute_all_forcings), instead of at every call.
+! [SYLVAIN]
+
+module pvland_rad_cache
+   implicit none
+
+  INTEGER, PARAMETER :: nsurf_pv = 8      ! number of radiating surfaces
+
+  ! Geometry only (computed in INIT_PVLAND)
+  REAL,    ALLOCATABLE :: F_pv(:,:,:,:)     ! view factors   (8,8,nx,ny)
+  REAL,    ALLOCATABLE :: Fsky_pv(:,:,:)    ! sky view factors (8,nx,ny)
+  ! LU factorisations of the radiosity matrices (computed in INIT_PVLAND)
+  !   SW: I - diag(albedo) F        LW: I - diag(1-emissivity) F
+  REAL,    ALLOCATABLE :: LU_SW_pv(:,:,:,:), LU_LW_pv(:,:,:,:)   ! (8,8,nx,ny)
+  INTEGER, ALLOCATABLE :: ipiv_SW_pv(:,:,:), ipiv_LW_pv(:,:,:)   ! (8,nx,ny)
+
+  ! Shortwave solution, recomputed only when its inputs change
+  LOGICAL, ALLOCATABLE :: sw_valid(:,:)                   ! (nx,ny)
+  REAL,    ALLOCATABLE :: sw_key(:,:,:)                   ! (4,nx,ny): swin, S_diffuse, lambda, phi
+  REAL,    ALLOCATABLE :: J_SW_pv(:,:,:), G_SW_pv(:,:,:), q_SW_pv(:,:,:)   ! (8,nx,ny)
+
+end module pvland_rad_cache

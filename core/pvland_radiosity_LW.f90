@@ -77,8 +77,41 @@ SUBROUTINE solve_LW_radiosities(N, epsilon, T, F, F_sky, L_down, &
   
   ! Solution is now in b
   J_LW = b
-  
+
 END SUBROUTINE solve_LW_radiosities
+
+
+SUBROUTINE solve_LW_radiosities_lu(N, epsilon, T, LU, ipiv, F_sky, L_down, &
+                                   J_LW, info)
+!-----------------------------------------------------------------------
+! Same as solve_LW_radiosities, but with the matrix I - (I-diag(eps)) F
+! already factorised by factor_radiosity_matrix (pvland_radiosity_SW.f90).
+! [SYLVAIN]
+!-----------------------------------------------------------------------
+  IMPLICIT NONE
+  INTEGER, INTENT(IN)  :: N
+  REAL,    INTENT(IN)  :: epsilon(N), T(N), LU(N,N), F_sky(N)
+  INTEGER, INTENT(IN)  :: ipiv(N)
+  REAL,    INTENT(IN)  :: L_down
+  REAL,    INTENT(OUT) :: J_LW(N)
+  INTEGER, INTENT(OUT) :: info
+  INTEGER :: i
+  REAL, PARAMETER :: sigma = 5.67e-8  ! Stefan-Boltzmann constant (W/m2/K4)
+
+  ! Right-hand side b = [eps_i sigma T_i^4] + [I - diag(eps)] x F_s x L_down
+  DO i = 1, N
+    J_LW(i) = epsilon(i) * sigma * T(i)**4
+    J_LW(i) = J_LW(i) + (1.0 - epsilon(i)) * F_sky(i) * L_down
+  END DO
+
+  CALL SGETRS('N', N, 1, LU, N, ipiv, J_LW, N, info)
+
+  IF (info /= 0) THEN
+    PRINT *, 'ERROR in solve_LW_radiosities_lu: SGETRS failed with info=', info
+    J_LW = 0.0
+  END IF
+
+END SUBROUTINE solve_LW_radiosities_lu
 
 
 SUBROUTINE compute_LW_irradiances(N, F, F_sky, J_LW, L_down, G_LW)

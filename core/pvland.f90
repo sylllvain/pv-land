@@ -41,6 +41,7 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   USE module_pvland_in
   USE module_pvland_out
   USE rad_pvland
+  USE pvland_rad_cache
   
   IMPLICIT NONE
 
@@ -57,6 +58,8 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   INTEGER :: i, j
   REAL :: beta_deg,theta_0_deg,psfc
   REAL, PARAMETER :: pi = 3.14159265359
+  REAL :: coef(8)              ! albedo or 1-emissivity of the 8 surfaces
+  INTEGER :: info_rad
 !
 !-----------------------------------------------------------------------
 !
@@ -173,6 +176,37 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
                         delta_glass(i,j), delta_EVA_top(i,j), &
                         delta_EVA_bot(i,j), delta_backsheet(i,j), &
                         eta_STC(i,j), gamma_PV(i,j))
+  ENDDO
+  ENDDO
+
+  ! ====== Radiosity model: temperature-independent quantities ======
+  ! View factors and LU factorisations of the SW and LW radiosity
+  ! matrices depend on geometry and optical properties only: computed
+  ! once here instead of at every call of compute_all_forcings.
+  ! Surfaces: 1=nat_n, 2=PVf_n, 3=PVb_n, 4=PVb_{n-1}, 5=PVf_{n-1},
+  !           6=PVb_{n+1}, 7=nat_{n-1}, 8=nat_{n+1}          [SYLVAIN]
+  ALLOCATE(F_pv(nsurf_pv,nsurf_pv,nx,ny), Fsky_pv(nsurf_pv,nx,ny))
+  ALLOCATE(LU_SW_pv(nsurf_pv,nsurf_pv,nx,ny), LU_LW_pv(nsurf_pv,nsurf_pv,nx,ny))
+  ALLOCATE(ipiv_SW_pv(nsurf_pv,nx,ny), ipiv_LW_pv(nsurf_pv,nx,ny))
+  ALLOCATE(sw_valid(nx,ny), sw_key(4,nx,ny))
+  ALLOCATE(J_SW_pv(nsurf_pv,nx,ny), G_SW_pv(nsurf_pv,nx,ny), q_SW_pv(nsurf_pv,nx,ny))
+  sw_valid(:,:) = .FALSE.
+
+  DO j=1,ny-1
+  DO i=1,nx-1
+    CALL compute_view_factor_matrix(L(i,j), a(i,j), width(i,j), h_PV(i,j), beta(i,j), &
+                                    F_pv(:,:,i,j))
+    CALL compute_sky_view_factors(F_pv(:,:,i,j), Fsky_pv(:,i,j))
+
+    coef = (/ albedo_nat(i,j), albedo_PVf(i,j), albedo_PVb(i,j), albedo_PVb(i,j), &
+              albedo_PVf(i,j), albedo_PVb(i,j), albedo_nat(i,j), albedo_nat(i,j) /)
+    CALL factor_radiosity_matrix(nsurf_pv, coef, F_pv(:,:,i,j), &
+                                 LU_SW_pv(:,:,i,j), ipiv_SW_pv(:,i,j), info_rad)
+
+    coef = 1.0 - (/ emiss_nat(i,j), emiss_PVf(i,j), emiss_PVb(i,j), emiss_PVb(i,j), &
+                    emiss_PVf(i,j), emiss_PVb(i,j), emiss_nat(i,j), emiss_nat(i,j) /)
+    CALL factor_radiosity_matrix(nsurf_pv, coef, F_pv(:,:,i,j), &
+                                 LU_LW_pv(:,:,i,j), ipiv_LW_pv(:,i,j), info_rad)
   ENDDO
   ENDDO
                         
@@ -299,12 +333,13 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
   REAL :: Cu, Ctheta
   REAL :: l_PVa_ref
   
-  REAL, ALLOCATABLE :: udir(:,:),zp_dc(:,:,:),ptsfc_PVa(:,:), &
+  ! (SAVE: allocated at the first call only)  [SYLVAIN]
+  REAL, ALLOCATABLE, SAVE :: udir(:,:),zp_dc(:,:,:),ptsfc_PVa(:,:), &
 	ptsfc_can(:,:), wdspsfc(:,:), zp_dc_nat(:,:,:), pt_nat(:,:), &
 	pt_can(:,:), pt_PVb(:,:), pt_PVf(:,:), pt_PVa(:,:), z0_sfc_arr(:,:)
 	
   ! Dummy soil type for dragcoef
-  INTEGER, ALLOCATABLE :: soiltyp_dummy(:,:)
+  INTEGER, ALLOCATABLE, SAVE :: soiltyp_dummy(:,:)
 
   !===================================================================
   ! WIND-DEPENDENT EXCHANGE FACTORS
@@ -402,6 +437,7 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
   ! Prandtl function of the Kaplani Eq.(8) branch
   cc_pr = ( 1.0 + (0.492/Pr)**(9.0/16.0) )**(8.0/27.0)
 
+  IF (.NOT. ALLOCATED(soiltyp_dummy)) THEN
   ALLOCATE(soiltyp_dummy(nx,ny))
   soiltyp_dummy = 11
 
@@ -409,6 +445,7 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
 		ptsfc_can(nx,ny),wdspsfc(nx,ny),zp_dc_nat(nx,ny,nz),&
 		pt_nat(nx,ny),pt_can(nx,ny),pt_PVb(nx,ny),pt_PVf(nx,ny),&
 		pt_PVa(nx,ny),z0_sfc_arr(nx,ny))
+  END IF
     
     DO j=1,ny-1
       DO i=1,nx-1
@@ -670,9 +707,10 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
 	cdh_PVa = facteur * cdh_PVa
 	cdq_PVa = facteur * cdq_PVa 
     
-   DEALLOCATE (udir,zp_dc,ptsfc_PVa, ptsfc_can,wdspsfc,zp_dc_nat,&
-	pt_nat,pt_can,pt_PVb,pt_PVf,pt_PVa,z0_sfc_arr)
-   DEALLOCATE(soiltyp_dummy)
+   ! arrays kept for the next call (SAVE)  [SYLVAIN]
+   !DEALLOCATE (udir,zp_dc,ptsfc_PVa, ptsfc_can,wdspsfc,zp_dc_nat,&
+	!pt_nat,pt_can,pt_PVb,pt_PVf,pt_PVa,z0_sfc_arr)
+   !DEALLOCATE(soiltyp_dummy)
     
   RETURN
 END SUBROUTINE drag_pvland
@@ -849,6 +887,8 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
 !
 !-----------------------------------------------------------------------
 !
+  USE pvland_rad_cache   ! view factors, LU factors, SW solution  [SYLVAIN]
+
   IMPLICIT NONE
   
   INCLUDE 'globcst.inc'
@@ -955,11 +995,12 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
   INTEGER :: info_rad
   
   ! Radiative fluxes per unit area (W/m2)
-  REAL , ALLOCATABLE, DIMENSION (:,:):: q_dot_SW_PVf, q_dot_LW_PVf
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: q_dot_SW_cell
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: q_dot_SW_PVb, q_dot_LW_PVb
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: q_dot_SW_nat, q_dot_LW_nat
-  REAL, ALLOCATABLE, DIMENSION (:,:) :: G_SW_PVf, G_SW_nat
+  ! (SAVE: allocated at the first call only)  [SYLVAIN]
+  REAL , ALLOCATABLE, DIMENSION (:,:), SAVE :: q_dot_SW_PVf, q_dot_LW_PVf
+  REAL, ALLOCATABLE, DIMENSION (:,:), SAVE :: q_dot_SW_cell
+  REAL, ALLOCATABLE, DIMENSION (:,:), SAVE :: q_dot_SW_PVb, q_dot_LW_PVb
+  REAL, ALLOCATABLE, DIMENSION (:,:), SAVE :: q_dot_SW_nat, q_dot_LW_nat
+  REAL, ALLOCATABLE, DIMENSION (:,:), SAVE :: G_SW_PVf, G_SW_nat
   
   ! Convective fluxes (W/m2) - from sfcflx
   REAL :: ptsflx_nat(nx,ny), qvsflx_nat(nx,ny)
@@ -1003,6 +1044,7 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
   ! 1. RADIATION (temperature-dependent)
   !=====================================================================
 
+IF (.NOT. ALLOCATED(q_dot_SW_PVf)) &
 ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
  q_dot_SW_PVb(nx,ny), q_dot_LW_PVb(nx,ny),q_dot_SW_nat(nx,ny), &
  q_dot_LW_nat(nx,ny),G_SW_PVf(nx,ny), G_SW_nat(nx,ny))
@@ -1012,9 +1054,11 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   
       IF (pv_park(i,j).eq.1.) THEN
 
-  ! View factors (geometry only)
-  CALL compute_view_factor_matrix(L(i,j), a(i,j), w(i,j), h_PV(i,j), beta(i,j), F_matrix)
-  CALL compute_sky_view_factors(F_matrix, F_sky)
+  ! View factors (geometry only): computed once in INIT_PVLAND  [SYLVAIN]
+  !CALL compute_view_factor_matrix(L(i,j), a(i,j), w(i,j), h_PV(i,j), beta(i,j), F_matrix)
+  !CALL compute_sky_view_factors(F_matrix, F_sky)
+  F_matrix = F_pv(:,:,i,j)
+  F_sky    = Fsky_pv(:,i,j)
   
   ! Surface optical properties (8-surface periodic array layout)
   ! Surfaces: 1=nat_n, 2=PVf_n, 3=PVb_n, 4=PVb_{n-1}, 5=PVf_{n-1},
@@ -1046,6 +1090,18 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   T_surf(7) = T_nat(i,j)           ! nat,n-1
   T_surf(8) = T_nat(i,j)           ! nat,n+1 
   
+  ! SW part: independent of the temperatures, so recomputed only when its
+  ! inputs change (compute_all_forcings is called 3 times per time step
+  ! with the same solar forcing).  [SYLVAIN]
+  IF ( sw_valid(i,j) .AND. sw_key(1,i,j) == swin(i,j)         &
+       .AND. sw_key(2,i,j) == S_diffuse_in(i,j)               &
+       .AND. sw_key(3,i,j) == lambda(i,j)                     &
+       .AND. sw_key(4,i,j) == phi(i,j) ) THEN
+  J_SW = J_SW_pv(:,i,j)
+  G_SW = G_SW_pv(:,i,j)
+  q_SW = q_SW_pv(:,i,j)
+  ELSE
+
   ! Direct SW on each surface (diffuse is handled separately in radiosity)
   CALL compute_S_ground(swin(i,j) - S_diffuse_in(i,j), L(i,j), a(i,j), beta(i,j), h_PV(i,j), lambda(i,j), phi(i,j), S_direct(1))
   CALL compute_S_PVf(swin(i,j) - S_diffuse_in(i,j), L(i,j), a(i,j), beta(i,j), h_PV(i,j), lambda(i,j), phi(i,j), S_direct(2))
@@ -1056,16 +1112,27 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   S_direct(7) = S_direct(1)
   S_direct(8) = S_direct(1)
   
-  ! SW radiosity
-  CALL solve_SW_radiosities(8, alpha_surf, F_matrix, F_sky, S_direct, &
-                            S_diffuse_in(i,j), J_SW, info_rad)
+  ! SW radiosity (matrix factorised once in INIT_PVLAND)  [SYLVAIN]
+  !CALL solve_SW_radiosities(8, alpha_surf, F_matrix, F_sky, S_direct, &
+  !                          S_diffuse_in(i,j), J_SW, info_rad)
+  CALL solve_SW_radiosities_lu(8, alpha_surf, LU_SW_pv(:,:,i,j), ipiv_SW_pv(:,i,j), &
+                            F_sky, S_direct, S_diffuse_in(i,j), J_SW, info_rad)
   CALL compute_SW_irradiances(8, F_matrix, F_sky, S_direct, S_diffuse_in(i,j), &
                              J_SW, G_SW)
   CALL compute_SW_net_fluxes(8, alpha_surf, G_SW, q_SW)
+
+  J_SW_pv(:,i,j) = J_SW
+  G_SW_pv(:,i,j) = G_SW
+  q_SW_pv(:,i,j) = q_SW
+  sw_key(:,i,j)  = (/ swin(i,j), S_diffuse_in(i,j), lambda(i,j), phi(i,j) /)
+  sw_valid(i,j)  = .TRUE.
+  ENDIF
   
-  ! LW radiosity (temperature-dependent)
-  CALL solve_LW_radiosities(8, epsilon_surf, T_surf, F_matrix, F_sky, &
-                           Lwin(i,j), J_LW, info_rad)
+  ! LW radiosity (temperature-dependent; matrix factorised once in INIT_PVLAND)
+  !CALL solve_LW_radiosities(8, epsilon_surf, T_surf, F_matrix, F_sky, &
+  !                         Lwin(i,j), J_LW, info_rad)
+  CALL solve_LW_radiosities_lu(8, epsilon_surf, T_surf, LU_LW_pv(:,:,i,j), ipiv_LW_pv(:,i,j), &
+                           F_sky, Lwin(i,j), J_LW, info_rad)
   CALL compute_LW_irradiances(8, F_matrix, F_sky, J_LW, Lwin(i,j), G_LW)
   CALL compute_LW_net_fluxes(8, G_LW, J_LW, q_LW)
   
@@ -1367,9 +1434,9 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
     END DO
   END DO
 
-DEALLOCATE (q_dot_SW_PVf, q_dot_LW_PVf,q_dot_SW_cell,&
- q_dot_SW_PVb, q_dot_LW_PVb,q_dot_SW_nat, &
- q_dot_LW_nat,G_SW_PVf, G_SW_nat)
+!DEALLOCATE (q_dot_SW_PVf, q_dot_LW_PVf,q_dot_SW_cell,&    ! kept (SAVE)  [SYLVAIN]
+! q_dot_SW_PVb, q_dot_LW_PVb,q_dot_SW_nat, &
+! q_dot_LW_nat,G_SW_PVf, G_SW_nat)
 
 END SUBROUTINE compute_all_forcings
 
