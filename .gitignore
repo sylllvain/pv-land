@@ -1,0 +1,19 @@
+# Compilation
+*.o
+*.mod
+*.exe
+a.out
+
+# Logs et sorties de runs
+slurm-*.out
+*.log
+pv_land_output.csv
+pv_diag_energy_balance.csv
+*.plt
+
+# Archives / docs générées
+*.zip
+pdf/
+
+# Éditeur
+*.swp
