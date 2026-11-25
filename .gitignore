@@ -20,3 +20,11 @@ pdf/
 
 # Build directory (objects, .mod)
 build/
+
+# Version 2: run outputs and the reference build of PV_LAND_final
+pv_land_output_2025.csv
+pv_diag_energy_balance_2025.csv
+series_diag.csv
+model_statistics_output_2025.csv
+*.pdf
+ref_PV_LAND_final/

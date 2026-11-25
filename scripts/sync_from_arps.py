@@ -12,7 +12,7 @@ Usage (from the PV-LAND directory):
     python3 scripts/sync_from_arps.py            # copy/generate from ARPS
     python3 scripts/sync_from_arps.py --check    # only compare, exit 1 if different
 
-The ARPS directory defaults to ../arps5.3.4_PVLAND (override with --arps DIR).
+The ARPS directory defaults to ../arps5.3.4_PVLAND_v2 (override with --arps DIR).
 """
 import argparse
 import difflib
@@ -25,6 +25,9 @@ CORE_FILES = [
     "module_pvland.f90",
     "pvland.f90",
     "pvland_driver.f90",
+    "pvland_obukhov.f90",
+    "pvland_soil.f90",
+    "pvland_dragcoef.f90",
     "pvland_profil.f90",
     "pvland_view_factors.f90",
     "pvland_solar_radiation.f90",
@@ -100,8 +103,8 @@ def targets(arps):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--arps", default=os.path.join("..", "arps5.3.4_PVLAND"),
-                   help="ARPS PV-LAND directory (default: ../arps5.3.4_PVLAND)")
+    p.add_argument("--arps", default=os.path.join("..", "arps5.3.4_PVLAND_v2"),
+                   help="ARPS PV-LAND directory (default: ../arps5.3.4_PVLAND_v2)")
     p.add_argument("--check", action="store_true",
                    help="compare only, do not write; exit 1 if files differ")
     args = p.parse_args()

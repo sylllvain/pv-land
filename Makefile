@@ -34,7 +34,7 @@ INTEL_LIB ?= /opt/intel/oneapi/compiler/latest/lib
 LDFLAGS = -L$(MKLROOT)/lib -Wl,-rpath,$(MKLROOT)/lib -Wl,-rpath,$(INTEL_LIB) -qmkl=sequential
 
 # ARPS PV-LAND directory (reference for core/ and arps_lib/)
-ARPS_DIR ?= ../arps5.3.4_PVLAND
+ARPS_DIR ?= ../arps5.3.4_PVLAND_v2
 PYTHON   ?= python3
 
 # Executable name and build directory (objects and .mod files)
@@ -56,7 +56,10 @@ CORE_SRC = module_pvland.f90 \
            pvland_radiosity_SW.f90 \
            pvland_radiosity_LW.f90 \
            pvland.f90 \
-           pvland_driver.f90
+           pvland_driver.f90 \
+           pvland_obukhov.f90 \
+           pvland_soil.f90 \
+           pvland_dragcoef.f90
 LIB_SRC  = sfcphy3d_extract.f90 \
            tmix3d_extract.f90 \
            thermolib3d.f90 \
@@ -101,7 +104,7 @@ run: $(EXEC)
 	./$(EXEC)
 
 run-short: $(EXEC)
-	./$(EXEC) recorded_data_short_5days.csv
+	./$(EXEC) recorded_data_2025_short_5days.csv
 
 # Consistency with ARPS
 check-arps:

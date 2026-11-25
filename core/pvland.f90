@@ -82,8 +82,7 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   
   ALLOCATE(a(nx,ny), beta(nx,ny), L(nx,ny), width(nx,ny), z_PVa(nx,ny),&
   h_PV(nx,ny), h_clear(nx,ny), lambda_f_park(nx,ny), l_nat_can(nx,ny),&
-  l_PVb_can(nx,ny),l_PVf_PVa(nx,ny), l_can_ref(nx,ny), theta_0(nx,ny),&
-  z0_PV_back(nx,ny), z0_PV_front(nx,ny), albedo_nat(nx,ny),&
+  theta_0(nx,ny), albedo_nat(nx,ny),&
   albedo_PVf(nx,ny), albedo_PVb(nx,ny), &
   emiss_nat(nx,ny), emiss_PVf(nx,ny), emiss_PVb(nx,ny), z_can(nx,ny))
 
@@ -94,7 +93,7 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
    delta_EVA_bot(nx,ny), delta_backsheet(nx,ny), &
    eta_STC(nx,ny), gamma_PV(nx,ny))
 
-  ALLOCATE(T_can(nx,ny), T_PVa(nx,ny))
+  ! T_can, T_PVa: allocated in arps.f90 (restart state)
   ALLOCATE(U_can(nx,ny), U_PVa(nx,ny))
 
   ALLOCATE(H_ref(nx,ny), Rn_ref(nx,ny))
@@ -131,9 +130,6 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   theta_0_deg = pv_theta_0_deg ! Park orientation angle (degrees)
   AZ_PARK  = pv_az_park    ! Meteorological azimuth faced by the panel fronts (deg)
 
-  ! Surface parameters
-  z0_PV_back = pv_z0_PV_back    ! PV panel back roughness (m)
-  z0_PV_front = pv_z0_PV_front  ! PV panel front roughness (m)
   
   ! Optical properties
   albedo_nat = pv_albedo_nat  ! Natural surface albedo
@@ -151,10 +147,7 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
   beta = beta_deg * (pi / 180.0)
   theta_0 = theta_0_deg * (pi / 180.0)
 
-  ! Interface lengths for neutral drag coefficient calculations
   ! (l_nat_can = z_can is set in pvland_geometry)
-  l_PVb_can  = pv_l_PVb_can   ! Eq. 6.7-6.9: PV back to canopy air
-  l_PVf_PVa  = pv_l_PVf_PVa   ! Eq. 6.11-6.13: PV front to air above PV
   
   ! PV module thermal and electrical parameters
   delta_PVf       = pv_delta_PVf
@@ -189,6 +182,8 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
 
   CALL pvland_geometry(nx,ny)
                         
+    ! air nodes: read from the restart file when initopt /= 1
+    IF (initopt.eq.1) THEN
     DO j=1,ny-1
       DO i=1,nx-1
       psfc = 0.5 * ( pprt(i,j,1) + pbar(i,j,1)                   &
@@ -199,8 +194,14 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
                         * (psfc/p0)**rddcp
 	  enddo !i
 	  enddo !j
+    ENDIF
 
     IF (initopt.eq.1) THEN
+    ! version 2 state (allocated in arps.f90 like T_PVf, read from the
+    ! restart file when initopt /= 1): neutral Obukhov length, canopy-air
+    ! humidity set at the first call of pvland_sfcphy (q_can < 0)
+    L_obk(:,:) = 0.0
+    q_can(:,:) = -1.0
     DO j=1,ny-1
       DO i=1,nx-1
       psfc = 0.5 * ( pprt(i,j,1) + pbar(i,j,1)                   &
@@ -236,7 +237,7 @@ SUBROUTINE pvland_geometry(nx,ny)
 !  PURPOSE:
 !
 !  Quantities of the PV park that depend on the panel tilt beta:
-!    - h_clear, width, lambda_f_park, z_can, l_nat_can, z_PVa
+!    - h_clear, width, lambda_f_park, z_can, l_nat_can, z_PVa = (h_PV+h_clear)/2
 !      (h_PV, the height of the panel top edge, is kept fixed);
 !    - view factors F_pv, sky view factors Fsky_pv and LU factorisations
 !      of the SW and LW radiosity matrices (module pvland_rad_cache).
@@ -279,9 +280,8 @@ SUBROUTINE pvland_geometry(nx,ny)
   ! Eq. 6.3-6.5: natural ground to canopy air
   l_nat_can  = z_can
 
-  ! z_PVa derived from Eq. 6.15: l_PVa_ref = z_ref - z_PVa
-  ! where z_PVa = (h_PV+h_clear)/2 + l_PVf*cos(beta)
-  z_PVa = (h_PV + h_clear) / 2.0 + l_PVf_PVa * COS(beta)
+  ! air above the panels: mid-height of the panels (version 2)
+  z_PVa = (h_PV + h_clear) / 2.0
 
   ! View factors and LU factorisations of the radiosity matrices
   DO j=1,ny-1
@@ -329,33 +329,33 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
 		cdh_PVb,cdq_PVb,cdm_PVb,&
 		cdh_PVf,cdq_PVf,cdm_PVf,&
 		cdh_can,cdq_can,cdm_can,&
-		z0_park_arr)
+		z0_park_arr,u_star)
 
 !
 !-----------------------------------------------------------------------
 !
 !  PURPOSE:
 !
-!  
+!  Wind profile in and above the PV park and exchange coefficients of
+!  the PV-LAND interfaces (version 2, from PV_LAND_final):
+!    - park z0 and d from the wind direction, the frontal density and the
+!      roughness z0_nat / displacement zd_nat of the natural vegetation;
+!    - U_can, U_PVa from the stability-dependent profile (u* at z_ref),
+!      floored at vsfcmin;
+!    - natural ground -> canopy air, canopy air -> reference, air above
+!      the panels -> reference: dragcoef_pv (thermal roughness zt/z0 =
+!      pv_ztz0_nat for the ground, pv_ztz0_air for the air nodes);
+!    - panel faces: mixed convection, forced h = C_for*U**p_for and
+!      free convection (Kaplani & Kaplanis 2014) scaled by pv_fac_h_free.
+!  Outside the PV park only uref (and z0_park_arr = z0_nat) are used.
 !
 !-----------------------------------------------------------------------
 !
-!  AUTHOR: 
-!
-!  MODIFICATION HISTORY:
-!
-!
-!-----------------------------------------------------------------------
-!
-!-----------------------------------------------------------------------
-!
-!  Variable Declarations.
-!
-!-----------------------------------------------------------------------
-!
-
   USE module_pvland_in
-  USE module_pvland_out
+  USE module_pvland_out, L_obk_state => L_obk   ! L_obk is the dummy argument here
+  USE pvland_nml, ONLY : pv_zd_nat, pv_ztz0_nat, pv_ztz0_air,          &
+                         pv_C_for_f, pv_C_for_b, pv_p_for_f, pv_p_for_b, &
+                         pv_fac_h_free
   
   IMPLICIT NONE
 
@@ -371,9 +371,9 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
   REAL, INTENT(IN) :: qvref      (nx,ny) ! ref qvair (kg/kg)
   REAL, INTENT(IN) :: T_nat      (nx,ny) ! soil surface temperature (K)
   REAL, INTENT(IN) :: rhosfc (nx,ny)    ! Base-state air density at the surface
-  REAL, INTENT(IN) :: z0_nat(nx,ny)
+  REAL, INTENT(IN) :: z0_nat(nx,ny)     ! Roughness length of the natural surface (m)
   INTEGER, INTENT(IN) :: soiltyp      (nx,ny) ! 
-  REAL, INTENT(IN) :: L_obk(nx,ny)
+  REAL, INTENT(IN) :: L_obk(nx,ny)      ! Obukhov length (m), 0 = neutral
   
   REAL, INTENT(OUT) :: uref      (nx,ny) ! ref velocity (m/s)
   REAL, INTENT(OUT) :: cdh_nat(nx,ny),cdq_nat(nx,ny),cdm_nat(nx,ny),&
@@ -382,6 +382,7 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
 		cdh_PVf(nx,ny),cdq_PVf(nx,ny),cdm_PVf(nx,ny),&
 		cdh_can(nx,ny),cdq_can(nx,ny),cdm_can(nx,ny),&
 		z0_park_arr(nx,ny)
+  REAL, INTENT(OUT) :: u_star(nx,ny)    ! friction velocity at z_ref (m/s), PV park only
 !
 !-----------------------------------------------------------------------
 !
@@ -393,83 +394,31 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
 
   REAL, PARAMETER :: pi = 3.14159265359
   REAL :: tema,temb,z_ref
-  REAL :: Uplus,u_star_ref,z0_interface
-  REAL, PARAMETER :: kappa = 0.387
+  REAL :: Uplus
   REAL, PARAMETER :: Pr = 0.71
-  REAL :: Cu, Ctheta
-  REAL :: l_PVa_ref
   
   ! (SAVE: allocated at the first call only)  [SYLVAIN]
-  REAL, ALLOCATABLE, SAVE :: udir(:,:),zp_dc(:,:,:),ptsfc_PVa(:,:), &
-	ptsfc_can(:,:), wdspsfc(:,:), zp_dc_nat(:,:,:), pt_nat(:,:), &
-	pt_can(:,:), pt_PVb(:,:), pt_PVf(:,:), pt_PVa(:,:), z0_sfc_arr(:,:)
+  REAL, ALLOCATABLE, SAVE :: udir(:,:),zp_dc(:,:,:),                     &
+	wdspsfc(:,:), zp_dc_nat(:,:,:), pt_nat(:,:),                          &
+	pt_can(:,:), pt_PVa(:,:), z0_sfc_arr(:,:)
 	
-  ! Dummy soil type for dragcoef
+  ! Dummy soil type for dragcoef_pv
   INTEGER, ALLOCATABLE, SAVE :: soiltyp_dummy(:,:)
 
   !===================================================================
-  ! WIND-DEPENDENT EXCHANGE FACTORS
-  ! Set use_wind_dep_<iface> = .TRUE.  => fac(U) = alpha_fac * max(U, U_min_fac)^(-k_fac)
-  ! Set use_wind_dep_<iface> = .FALSE. => fac    = constant fallback values
-  ! Factor > 1 = stronger coupling = more heat transfer
+  ! PV panel convection (both faces):
+  !   forced: h_forced = C_for * U**p_for (pv_C_for_*, pv_p_for_*)
+  !   free  : Kaplani & Kaplanis (2014), scaled by pv_fac_h_free
+  !   mixing: Kaplani Eq.(20), m = 3
+  ! Air properties at T_air + 0.75*(T_surface - T_air).
   !===================================================================
-  LOGICAL, PARAMETER :: use_wind_dep_nat_can = .TRUE.
-  LOGICAL, PARAMETER :: use_wind_dep_can_ref = .TRUE.
-  LOGICAL, PARAMETER :: use_wind_dep_PVa_ref = .TRUE.
-  LOGICAL, PARAMETER :: use_wind_dep_PVb_can = .TRUE.
-  LOGICAL, PARAMETER :: use_wind_dep_PVf_PVa = .TRUE.
-
-  ! nat -> canopy air
-  REAL, PARAMETER :: alpha_fac_nat_can = 2.0   ! prefactor
-  REAL, PARAMETER :: k_fac_nat_can     = 0.5   ! exponent
-  REAL, PARAMETER :: fac_nat_can_cst   = 4.47   ! constant fallback
-
-  ! canopy air -> reference
-  REAL, PARAMETER :: alpha_fac_can_ref = 5.2   ! prefactor
-  REAL, PARAMETER :: k_fac_can_ref     = 0.5   ! exponent
-  REAL, PARAMETER :: fac_can_ref_cst   = 11.6   ! constant fallback
-
-  ! air above PV -> reference
-  REAL, PARAMETER :: alpha_fac_PVa_ref = 5.2   ! prefactor
-  REAL, PARAMETER :: k_fac_PVa_ref     = 0.5   ! exponent
-  REAL, PARAMETER :: fac_PVa_ref_cst   = 11.6   ! constant fallback
-
-  ! PV back -> canopy air
-  REAL, PARAMETER :: alpha_fac_PVb_can = 1.2   ! prefactor
-  REAL, PARAMETER :: k_fac_PVb_can     = 0.6   ! exponent
-  REAL, PARAMETER :: fac_PVb_can_cst   = 2.1   ! constant fallback
-
-  ! PV front -> air above PV
-  REAL, PARAMETER :: alpha_fac_PVf_PVa = 1.2   ! prefactor
-  REAL, PARAMETER :: k_fac_PVf_PVa     = 0.6   ! exponent
-  REAL, PARAMETER :: fac_PVf_PVa_cst   = 2.1   ! constant fallback
-
-  REAL, PARAMETER :: U_min_fac = 0.2   ! wind floor (m/s) to prevent divergence
-  !===================================================================
-  ! PV panel convection
-  ! Forced: Sparrow, Ramsey & Mass (1979), prefactor calibrated on site
-  ! Free  : Kaplani & Kaplanis (2014)
-  ! Mixing: Kaplani Eq.(20), m = 3
-  !===================================================================
-  ! Forced-convection prefactors, calibrated on the site energy balance (same value both faces).
-  REAL, PARAMETER :: C_sparrow_f  = 5
-  REAL, PARAMETER :: C_sparrow_b  = 5
-  ! Wind exponent, different for each face: the front is a free plate in the flow, the back is
-  ! a confined cavity between panel and soil and responds far less to the outside wind.
-  REAL, PARAMETER :: p_forced_f = 0.5   ! front face: Sparrow et al. (1979)
-  REAL, PARAMETER :: p_forced_b = 0.30  ! back face: measured on site (confined cavity)
-  ! Reference Reynolds used to normalise the back-face law, so that both faces share the
-  ! same C_sparrow and differ ONLY through the exponent. Re_0 = median back-face Re (on U_can).
-  REAL, PARAMETER :: Re_0 = 2.0e5
-  REAL :: L_star     ! [m]      Sparrow characteristic length, L* = 4*A/C
-  REAL :: Tfilm      ! [K]      film temperature, 0.5*(T_surface + T_air)
-  REAL :: kair       ! [W/m/K]  air thermal conductivity at Tfilm
-  REAL :: muair      ! [Pa.s]   air dynamic viscosity at Tfilm (Sutherland)
+  REAL :: Tprop      ! [K]      property temperature, T_air + 0.75*(T_surface - T_air)
+  REAL :: kair       ! [W/m/K]  air thermal conductivity at Tprop
+  REAL :: muair      ! [Pa.s]   air dynamic viscosity at Tprop (Sutherland)
   REAL :: nuair      ! [m2/s]   air kinematic viscosity, mu/rho
   REAL :: alair      ! [m2/s]   air thermal diffusivity, k/(rho*cp)
   REAL :: dTs        ! [K]      signed surface-to-air temperature difference
-  REAL :: Re_pv      ! [-]      Reynolds number on L*
-  REAL :: Nu_fo      ! [-]      forced-convection Nusselt number
+  REAL :: vface      ! [m/s]    wind speed at the face (U_can or U_PVa)
   REAL :: h_cv       ! [W/m2/K] convective heat transfer coefficient
   REAL :: cc_pr      ! [-]      Prandtl function of Kaplani Eq.(8), precomputed once
   REAL :: Tf_na      ! [K]      Kaplani expansion temperature, Ta + 0.25*(Ts-Ta)
@@ -479,10 +428,8 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
   REAL :: Rac_na     ! [-]      critical Rayleigh number, Grc*Pr
   REAL :: Nu_nat     ! [-]      natural-convection Nusselt (Kaplani, on L)
   REAL :: h_free     ! [W/m2/K] free (natural) convection coefficient
-  REAL :: h_forced   ! [W/m2/K] forced-convection coefficient (Sparrow, on L_star)
+  REAL :: h_forced   ! [W/m2/K] forced-convection coefficient
   LOGICAL :: unstab  ! [-]      .TRUE. if the buoyancy arrangement is unstable
-  
-  REAL :: facteur
 
 !
 !-----------------------------------------------------------------------
@@ -507,10 +454,9 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
   ALLOCATE(soiltyp_dummy(nx,ny))
   soiltyp_dummy = 11
 
-    ALLOCATE (udir(nx,ny),zp_dc(nx,ny,3),ptsfc_PVa(nx,ny), &
-		ptsfc_can(nx,ny),wdspsfc(nx,ny),zp_dc_nat(nx,ny,nz),&
-		pt_nat(nx,ny),pt_can(nx,ny),pt_PVb(nx,ny),pt_PVf(nx,ny),&
-		pt_PVa(nx,ny),z0_sfc_arr(nx,ny))
+    ALLOCATE (udir(nx,ny),zp_dc(nx,ny,3),                               &
+		wdspsfc(nx,ny),zp_dc_nat(nx,ny,nz),                             &
+		pt_nat(nx,ny),pt_can(nx,ny),pt_PVa(nx,ny),z0_sfc_arr(nx,ny))
   END IF
     
     DO j=1,ny-1
@@ -520,9 +466,10 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
     !-------------------------------------------------------------------
     IF (PV_PARK(i,j).eq.1.) THEN
       udir(i,j)=ATAN2((u(i,j,2)+u(i+1,j,2)),(v(i,j,2)+v(i,j+1,2)))
-      if (udir(i,j) < 0.0d0) udir(i,j) = udir(i,j) + 2*pi
-    CALL z0_theta(udir(i,j), lambda_f_park(i,j), h_PV(i,j), beta(i,j)*180./pi, theta_0(i,j), z0_park(i,j))
-    CALL d_theta(udir(i,j), lambda_f_park(i,j), h_PV(i,j), theta_0(i,j), zd_park(i,j))
+      if (udir(i,j) < 0.0) udir(i,j) = udir(i,j) + 2*pi
+    CALL z0_theta(udir(i,j), lambda_f_park(i,j), h_PV(i,j), beta(i,j)*180./pi, theta_0(i,j), &
+                  z0_nat(i,j), pv_zd_nat, z0_park(i,j))
+    CALL d_theta(udir(i,j), lambda_f_park(i,j), h_PV(i,j), theta_0(i,j), pv_zd_nat, zd_park(i,j))
     z0_park_arr(i,j) = z0_park(i,j)
     ELSE
     z0_park_arr(i,j) = z0_nat(i,j)
@@ -538,25 +485,28 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
                    SQRT(tema*tema+temb*temb+w(i,j,2)*w(i,j,2)))
 	  enddo !i
 	  enddo !j
-    
-    !CALL Rib_to_Lobk(nx,ny,nz,1,nx-1,1,ny-1,zp,z0_park_arr,uref,ptsfc,       &
-	!	       pt1, L_obk)
 		       
     DO j=1,ny-1
       DO i=1,nx-1
+    IF (PV_PARK(i,j).eq.1.) THEN
     z_ref = zp(i,j,2) + 0.5*(zp(i,j,3)-zp(i,j,2))
     
     CALL compute_U_plus(z_ref, udir(i,j), a(i,j), beta(i,j)*180./pi, &
-		L(i,j), h_clear(i,j), theta_0(i,j), L_obk(i,j), Uplus)
-    u_star_ref = uref(i,j) / Uplus
+		L(i,j), h_clear(i,j), theta_0(i,j), z0_nat(i,j), pv_zd_nat, L_obk(i,j), Uplus)
+    u_star(i,j) = uref(i,j) / Uplus
     
     CALL compute_U_plus(z_can(i,j), udir(i,j), a(i,j), beta(i,j)*180./pi, &
-		L(i,j), h_clear(i,j), theta_0(i,j), L_obk(i,j), Uplus)
-    U_can(i,j) = u_star_ref * Uplus
+		L(i,j), h_clear(i,j), theta_0(i,j), z0_nat(i,j), pv_zd_nat, L_obk(i,j), Uplus)
+    U_can(i,j) = MAX(u_star(i,j) * Uplus, vsfcmin)   ! same wind floor as in sfcflx
     
     CALL compute_U_plus(z_PVa(i,j), udir(i,j), a(i,j), beta(i,j)*180./pi, &
-		L(i,j), h_clear(i,j), theta_0(i,j), L_obk(i,j), Uplus)
-    U_PVa(i,j) = u_star_ref * Uplus
+		L(i,j), h_clear(i,j), theta_0(i,j), z0_nat(i,j), pv_zd_nat, L_obk(i,j), Uplus)
+    U_PVa(i,j) = MAX(u_star(i,j) * Uplus, vsfcmin)
+    ELSE
+    u_star(i,j) = 0.
+    U_can(i,j)  = uref(i,j)
+    U_PVa(i,j)  = uref(i,j)
+    ENDIF
 
       END DO
     END DO
@@ -574,56 +524,35 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
       END DO
     END DO
 
-    ! --- sol naturel : interface l_nat_can, vent U_can ---
+    ! --- natural ground -> canopy air: interface l_nat_can, wind U_can ---
     z0_sfc_arr(:,:)  = z0_nat
     zp_dc_nat(:,:,3) = 2.0*l_nat_can        ! => z1 = l_nat_can
-    CALL dragcoef(nx, ny, nz, zp_dc_nat, pt_nat, qvref, soiltyp_dummy, &
-                  z0_sfc_arr, max(U_can, U_min_fac), pt_can, cdm_nat, cdh_nat, cdq_nat)
+    CALL dragcoef_pv(nx, ny, nz, zp_dc_nat, pt_nat, qvref, soiltyp_dummy, &
+                  z0_sfc_arr, pv_ztz0_nat, U_can, pt_can, cdm_nat, cdh_nat, cdq_nat)
 
-	facteur = 4
-	!facteur = 1
-	cdm_nat = facteur * cdm_nat
-	cdh_nat = facteur * cdh_nat
-	cdq_nat = facteur * cdq_nat
-
-    ! --- PV back face: interface l_PVb_can, wind U_can ---
-    z0_sfc_arr(:,:)  = z0_PV_back
-    zp_dc_nat(:,:,3) = 2.0 * l_PVb_can
+    ! --- cdh_PVb: mixed convection on the BACK face (faces the ground) ---
+    cdm_PVb(:,:) = 0.0   ! momentum not used for the PV faces
     DO j = 1, ny-1
       DO i = 1, nx-1
-        pt_PVb(i,j) = T_PVb(i,j) * (p0/pbar(i,j,2))**rddcp
-      END DO
-    END DO
-    !CALL dragcoef(nx, ny, nz, zp_dc_nat, pt_PVb, qvref, soiltyp_dummy, &
-    !              z0_sfc_arr, max(U_can, U_min_fac), pt_can(:,:), cdm_PVb, cdh_PVb, cdq_PVb)
-	
-    ! --- cdh_PVb: mixed convection on the BACK face (faces the ground).
-    ! dragcoef above still provides cdm_PVb (momentum); only cdh/cdq are replaced here.
-    DO j = 1, ny-1
-      DO i = 1, nx-1
-        ! Sparrow characteristic length: L* = 4*A/C (plate area / perimeter)
-        L_star = 2.0 * L(i,j)
-        ! film temperature: property evaluation point for the boundary layer
-        Tfilm  = 0.5 * (T_PVb(i,j) + T_can(i,j))
-        ! air thermal conductivity k(Tfilm)  [W/m/K]
-        kair   = 1.5207e-11*Tfilm**3 - 4.8574e-8*Tfilm**2 + 1.0184e-4*Tfilm - 3.9333e-4
-        ! air dynamic viscosity mu(Tfilm), Sutherland's law  [Pa.s]
-        muair  = 1.458e-6 * Tfilm**1.5 / (Tfilm + 110.4)
+        ! signed surface-to-air temperature difference  [K]
+        dTs    = T_PVb(i,j) - T_can(i,j)
+        ! property temperature, 3/4 of the way from the air to the face
+        Tprop  = T_can(i,j) + 0.75*dTs
+        ! air thermal conductivity k(Tprop)  [W/m/K]
+        kair   = 1.5207e-11*Tprop**3 - 4.8574e-8*Tprop**2 + 1.0184e-4*Tprop - 3.9333e-4
+        ! air dynamic viscosity mu(Tprop), Sutherland's law  [Pa.s]
+        muair  = 1.458e-6 * Tprop**1.5 / (Tprop + 110.4)
         ! air kinematic viscosity nu = mu/rho  [m2/s]
         nuair  = muair / rhosfc(i,j)
         ! air thermal diffusivity alpha = k/(rho*cp)  [m2/s]
         alair  = kair / (rhosfc(i,j) * cp)
-        ! signed surface-to-air temperature difference  [K]
-        dTs    = T_PVb(i,j) - T_can(i,j)
         ! buoyancy arrangement: back face points DOWN, so a COLD face (night) is unstable
         unstab = (dTs < 0.0)
-        ! Reynolds number on the Sparrow length, using the local canopy wind
-        Re_pv  = MAX(U_can(i,j), U_min_fac) * L_star / nuair
-        ! forced Nusselt, BACK face: normalised at Re_0 so both faces share C_sparrow
-        Nu_fo  = C_sparrow_b * Pr**(1.0/3.0) * SQRT(Re_0) * (Re_pv/Re_0)**p_forced_b
+        ! forced convection, canopy wind
+        vface    = U_can(i,j)
+        h_forced = pv_C_for_b * vface**pv_p_for_b
         ! ---- Natural convection: Kaplani & Kaplanis (2014), Sec. 2.1 ----
-        ! Rayleigh on the physical length L; Tf after Kaplani.
-        Tf_na    = Tfilm - 0.25*dTs
+        Tf_na    = T_can(i,j) + 0.25*dTs
         Ra_na    = 9.81 / Tf_na * MAX(ABS(dTs), 0.05) * L(i,j)**3 / (nuair*alair)
         theta_na = pi/2.0 - beta(i,j)         ! angle from the VERTICAL (Kaplani convention)
         IF (unstab) THEN
@@ -647,61 +576,39 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
           END IF
         END IF
         Nu_nat = MAX(Nu_nat, 0.0)
-        ! Blend on h, not Nu: forced lives on L_star, natural on L (two length scales)
-        h_forced = Nu_fo  * kair / L_star
-        h_free   = Nu_nat * kair / L(i,j)
+        h_free   = pv_fac_h_free * Nu_nat * kair / L(i,j)
         h_cv     = ( h_forced**3 + h_free**3 )**(1.0/3.0)
-        ! convert h to the model's exchange coefficient: H = rho*cp*cdh*U*dT, so U cancels
-        cdh_PVb(i,j) = h_cv / ( rhosfc(i,j) * cp * MAX(U_can(i,j), U_min_fac) )
+        ! convert h to the model's exchange coefficient: H = rho*cp*cdh*U*dT
+        cdh_PVb(i,j) = h_cv / ( rhosfc(i,j) * cp * U_can(i,j))
       END DO
     END DO
     ! moisture coefficient follows heat (dry surface: no latent flux anyway)
     cdq_PVb(:,:) = cdh_PVb(:,:)
     
-    ! --- PV front face: interface l_PVf_PVa, wind U_PVa ---
-    z0_sfc_arr(:,:)  = z0_PV_front
-    zp_dc_nat(:,:,3) = 2.0*l_PVf_PVa
-    DO j = 1, ny-1
-      DO i = 1, nx-1
-        pt_PVf(i,j) = T_PVf(i,j) * (p0/pbar(i,j,2))**rddcp
-        pt_PVa(i,j) = T_PVa(i,j) * (p0/pbar(i,j,2))**rddcp
-        wdspsfc(i,j)   = U_PVa(i,j)
-      END DO
-    END DO
-    !CALL dragcoef(nx, ny, nz, zp_dc_nat, pt_PVf, qvref, soiltyp_dummy, &
-    !              z0_sfc_arr, max(U_PVa, U_min_fac), pt_PVa(:,:), cdm_PVf, cdh_PVf, cdq_PVf)
-
     ! --- cdh_PVf : mixed convection on the FRONT face (faces the sky) ---
     DO j = 1, ny-1
       DO i = 1, nx-1
-        ! Sparrow characteristic length: L* = 4*A/C (plate area / perimeter)
-        L_star = 2.0 * L(i,j)
-        ! film temperature: property evaluation point for the boundary layer
-        Tfilm  = 0.5 * (T_PVf(i,j) + T_PVa(i,j))
-        ! air thermal conductivity k(Tfilm)  [W/m/K]
-        kair   = 1.5207e-11*Tfilm**3 - 4.8574e-8*Tfilm**2 + 1.0184e-4*Tfilm - 3.9333e-4
-        ! air dynamic viscosity mu(Tfilm), Sutherland's law  [Pa.s]
-        muair  = 1.458e-6 * Tfilm**1.5 / (Tfilm + 110.4)
-        ! air kinematic viscosity nu = mu/rho  [m2/s]
-        nuair  = muair / rhosfc(i,j)
-        ! air thermal diffusivity alpha = k/(rho*cp)  [m2/s]
-        alair  = kair / (rhosfc(i,j) * cp)
-        ! signed surface-to-air temperature difference  [K]
+        pt_PVa(i,j) = T_PVa(i,j) * (p0/pbar(i,j,2))**rddcp
+      END DO
+    END DO
+    cdm_PVf(:,:) = 0.0   ! momentum not used for the PV faces
+    DO j = 1, ny-1
+      DO i = 1, nx-1
         dTs    = T_PVf(i,j) - T_PVa(i,j)
+        Tprop  = T_PVa(i,j) + 0.75*dTs
+        kair   = 1.5207e-11*Tprop**3 - 4.8574e-8*Tprop**2 + 1.0184e-4*Tprop - 3.9333e-4
+        muair  = 1.458e-6 * Tprop**1.5 / (Tprop + 110.4)
+        nuair  = muair / rhosfc(i,j)
+        alair  = kair / (rhosfc(i,j) * cp)
         ! buoyancy arrangement: front face points UP, so a HOT face (day) is unstable
         unstab = (dTs > 0.0)
-        ! Reynolds number on the Sparrow length, using the local above-panel wind
-        Re_pv  = MAX(U_PVa(i,j), U_min_fac) * L_star / nuair
-        ! forced Nusselt, FRONT face: free plate, Sparrow et al. (1979).
-        ! Re_0-normalised form; with p_forced_f = 0.5 it reduces to C * Pr^(1/3) * Re^0.5.
-        Nu_fo  = C_sparrow_f * Pr**(1.0/3.0) * SQRT(Re_0) * (Re_pv/Re_0)**p_forced_f
-        ! ---- Natural convection: Kaplani & Kaplanis (2014), Sec. 2.1 ----
-        ! Rayleigh on the physical length L; Tf after Kaplani.
-        Tf_na    = Tfilm - 0.25*dTs
+        ! forced convection, wind above the panels
+        vface    = U_PVa(i,j)
+        h_forced = pv_C_for_f * vface**pv_p_for_f
+        Tf_na    = T_PVa(i,j) + 0.25*dTs
         Ra_na    = 9.81 / Tf_na * MAX(ABS(dTs), 0.05) * L(i,j)**3 / (nuair*alair)
         theta_na = pi/2.0 - beta(i,j)         ! angle from the VERTICAL (Kaplani convention)
         IF (unstab) THEN
-          ! up-facing hot-plate arrangement (day front / night back): Kaplani Eq.(7)
           IF (beta(i,j) > pi/6.0) THEN        ! theta < 60 deg
             Grc_na = 1.327e10 * EXP(-3.708*theta_na)
             Rac_na = Grc_na * Pr
@@ -711,7 +618,6 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
             Nu_nat = 0.13 * Ra_na**(1.0/3.0)
           END IF
         ELSE
-          ! down-facing hot-plate arrangement (day back / night front): Kaplani Eq.(8)-(9)
           IF (beta(i,j) >= pi/6.0) THEN       ! beta >= 30 deg : Kaplani Eq.(8), all Ra
             Nu_nat = ( 0.825 + 0.387*( Ra_na*MAX(SIN(beta(i,j)),0.0) )**(1.0/6.0) / cc_pr )**2
           ELSE IF (beta(i,j) > 2.0*pi/180.0) THEN  ! 2 < beta < 30 deg : Kaplani Eq.(9), inclined
@@ -721,63 +627,44 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
           END IF
         END IF
         Nu_nat = MAX(Nu_nat, 0.0)
-        ! Blend on h, not Nu: forced lives on L_star, natural on L (two length scales)
-        h_forced = Nu_fo  * kair / L_star
-        h_free   = Nu_nat * kair / L(i,j)
+        h_free   = pv_fac_h_free * Nu_nat * kair / L(i,j)
         h_cv     = ( h_forced**3 + h_free**3 )**(1.0/3.0)
-        ! convert h to the model's exchange coefficient: H = rho*cp*cdh*U*dT, so U cancels
-        cdh_PVf(i,j) = h_cv / ( rhosfc(i,j) * cp * MAX(U_PVa(i,j), U_min_fac) )
+        cdh_PVf(i,j) = h_cv / ( rhosfc(i,j) * cp * U_PVa(i,j) )
       END DO
     END DO
-    ! moisture coefficient follows heat (dry surface: no latent flux anyway)
     cdq_PVf(:,:) = cdh_PVf(:,:)
 
-    	
-    ! Canopy air to reference, with stability.
-    ! zp_dc(3) is set so that dragcoef's internal z1 = l_can_ref - zd_park.
-    
-    l_can_ref = z_ref - z_can
+    ! --- canopy air -> reference, with stability ---
+    ! zp_dc(3) is set so that dragcoef_pv's internal z1 = z_ref - max(z_can, zd_park).
     zp_dc(:,:,1) = zp(:,:,1)
     zp_dc(:,:,2) = 0.0
 
     DO j = 1, ny-1
       DO i = 1, nx-1
+        z_ref = zp(i,j,2) + 0.5*(zp(i,j,3)-zp(i,j,2))
         zp_dc(i,j,3) = 2.0 * (z_ref - max(z_can(i,j), zd_park(i,j)))
         pt_can(i,j) = T_can(i,j) * (p0/pbar(i,j,2))**rddcp
         wdspsfc(i,j) = uref(i,j)
       END DO
     END DO
     
-    CALL dragcoef(nx, ny, nz, zp_dc, &
-                 pt_can, qvref, soiltyp_dummy, z0_park_arr, &
+    CALL dragcoef_pv(nx, ny, nz, zp_dc, &
+                 pt_can, qvref, soiltyp_dummy, z0_park_arr, pv_ztz0_air, &
                  wdspsfc, pt1, &
                  cdm_can, cdh_can, cdq_can)
-                 
-    facteur = 10
-    !facteur = 1
-	cdm_can = facteur * cdm_can
-	cdh_can = facteur * cdh_can
-	cdq_can = facteur * cdq_can
     
-    ! Air above PV to Reference
-    !l_PVa_ref = z_ref - z_PVa
-    zp_dc(:,:,2) = 0.0
-    zp_dc(:,:,3) = 2.0 * (z_ref - z_PVa(:,:))
+    ! --- air above the panels -> reference ---
+    DO j = 1, ny-1
+      DO i = 1, nx-1
+        z_ref = zp(i,j,2) + 0.5*(zp(i,j,3)-zp(i,j,2))
+        zp_dc(i,j,3) = 2.0 * (z_ref - max(z_PVa(i,j), zd_park(i,j)))
+      END DO
+    END DO
     
-    CALL dragcoef(nx, ny, nz, zp_dc, &
-                 pt_PVa, qvref, soiltyp_dummy, z0_park_arr, &
+    CALL dragcoef_pv(nx, ny, nz, zp_dc, &
+                 pt_PVa, qvref, soiltyp_dummy, z0_park_arr, pv_ztz0_air, &
                  wdspsfc, pt1, &
                  cdm_PVa, cdh_PVa, cdq_PVa)
-    
-    facteur = 10
-    cdm_PVa = facteur * cdm_PVa
-	cdh_PVa = facteur * cdh_PVa
-	cdq_PVa = facteur * cdq_PVa 
-    
-   ! arrays kept for the next call (SAVE)  [SYLVAIN]
-   !DEALLOCATE (udir,zp_dc,ptsfc_PVa, ptsfc_can,wdspsfc,zp_dc_nat,&
-	!pt_nat,pt_can,pt_PVb,pt_PVf,pt_PVa,z0_sfc_arr)
-   !DEALLOCATE(soiltyp_dummy)
     
   RETURN
 END SUBROUTINE drag_pvland
@@ -926,6 +813,7 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
                                cdh, cdh_nat, cdh_PVb, cdh_PVf, &
                                cdm, cdm_nat, cdm_PVb, cdm_PVf, &
                                cdq, cdq_nat, cdq_PVb, cdq_PVf, &
+                               cdq_can, q_can_prev, &
                                frc_nat, frc_soil, frc_PVf, frc_cell, frc_PVb, &
                                frc_wsfc, frc_wdp, frc_wcnp, wrmax, &
                                H_nat_out, LE_nat_out, G_nat_out, Rn_nat_out, Rn_ref_out, &
@@ -939,7 +827,8 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
                                diag_T_can_out, diag_T_PVa_out, &
                                diag_JLW_PVf_out, diag_JLW_PVb_out, &
                                G_SW_nat_out, J_SW_nat_out, &
-                               G_LW_nat_out, J_LW_nat_out)
+                               G_LW_nat_out, J_LW_nat_out, &
+                               q_can_out, gcan_out, vpd_f3_out, vpd_ref_out)
 !
 !-----------------------------------------------------------------------
 !
@@ -1025,6 +914,8 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
   REAL, INTENT(IN) :: cdq_nat(nx,ny)
   REAL, INTENT(IN) :: cdq_PVb(nx,ny)
   REAL, INTENT(IN) :: cdq_PVf(nx,ny)
+  REAL, INTENT(IN) :: cdq_can(nx,ny)      ! Moisture drag coeff. canopy air -> reference
+  REAL, INTENT(IN) :: q_can_prev(nx,ny)   ! Canopy-air humidity of the previous small timestep (kg/kg), for F3
   
   ! OUTPUT: temperature forcing terms (K/s)
   REAL, INTENT(OUT) :: frc_nat(nx,ny), frc_soil(nx,ny)
@@ -1052,6 +943,11 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
   ! Natural surface irradiances/radiosities -- from _nat version
   REAL, INTENT(OUT) :: G_SW_nat_out(nx,ny), J_SW_nat_out(nx,ny)
   REAL, INTENT(OUT) :: G_LW_nat_out(nx,ny), J_LW_nat_out(nx,ny)
+  ! Canopy-air humidity diagnostics (PV park; outside: q_can = q_ref, gcan = 0)
+  REAL, INTENT(OUT) :: q_can_out(nx,ny)    ! Canopy-air specific humidity (kg/kg)
+  REAL, INTENT(OUT) :: gcan_out(nx,ny)     ! Conductance canopy air -> reference [kg m-2 s-1]
+  REAL, INTENT(OUT) :: vpd_f3_out(nx,ny)   ! VPD used in F3 [kPa]
+  REAL, INTENT(OUT) :: vpd_ref_out(nx,ny)  ! qvsat(T_air) - q_ref [kPa]
   
   ! Local - Radiation (8-surface radiosity system)
   REAL :: F_matrix(8,8), F_sky(8)
@@ -1311,7 +1207,15 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   ! 3. SOIL FORCINGS (via soilebm_frc)
   !=====================================================================
   
-  ! Saturated specific humidity at reference level
+  ! Humidity of the canopy air (air under the panels, version 2): water
+  ! vapour from the natural surface goes through the canopy air, a node
+  ! without storage like T_can, then to the reference level through
+  !    gcan = (a/(w+a)) rho_ref cdq_can U_ref   [kg m-2 s-1]
+  ! q_can is computed in soilebm_frc_pv/evapflx_pv. F3 (Alfieri et al.
+  ! 2008) uses the vapour pressure deficit of the canopy air,
+  ! qvsat(T_can) - q_can, with q_can of the previous small timestep.
+  ! Outside the park: no canopy-air node (gcan = 0, q_can = q_ref) and F3,
+  ! F4 from the air at the reference level.  [SYLVAIN]
   CALL getqvs(nx, ny, 1, 1, nx-1, 1, ny-1, 1, 1, psfc, T_can, qvsata_pv)
   CALL getqvs(nx, ny, 1, 1, nx-1, 1, ny-1, 1, 1, psfc, Tref, qvsata)
   
@@ -1320,12 +1224,13 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
     
       IF (pv_park(i,j).eq.1.) THEN
 
-      ! f3: stomatal response to VPD
-      IF (qvsata_pv(i,j) - qvref(i,j) <= 12.5) THEN
-        f3 = 1.0 - 0.06*(qvsata_pv(i,j) - qvref(i,j))
-      ELSE
-        f3 = 0.25
-      END IF
+      gcan_out(i,j) = a(i,j) / (w(i,j) + a(i,j)) * rhosfc(i,j) * cdq_can(i,j) * U_ref(i,j)
+
+      ! f3: Alfieri et al. (2008), Eq. 7, g = 0.1914 1/kPa (Noah LSM)
+      VPD_kPa = (qvsata_pv(i,j) - q_can_prev(i,j)) * psfc(i,j) / 622.0
+      vpd_f3_out(i,j)  = VPD_kPa
+      vpd_ref_out(i,j) = (qvsata_pv(i,j) - qvref(i,j)) * psfc(i,j) / 622.0
+      f3 = MAX(0.25, MIN(1.0, 1.0 - 0.1914*VPD_kPa))
       
       ! f4: stomatal response to temperature
       IF (T_can(i,j) >= 302.15) THEN
@@ -1333,12 +1238,6 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
       ELSE
         f34(i,j) = 1.0 / (1.0 + EXP(-0.41 * (T_can(i,j) - 282.05)))
       END IF
-
-      ! f3: stomatal response to VPD
-      !VPD_kPa = (qvsata(i,j) - qvref(i,j)) * psfc(i,j) / 622.0
-
-      ! Hyperbolic formulation (Kim & Verma, 1991)
-      !f3 = 1.0 / (1.0 + 0.13 * VPD_kPa)
       
       uref_nat(i,j) = U_can(i,j)
       tref_nat(i,j) = T_can(i,j)
@@ -1347,12 +1246,13 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
       
       ELSE
 
-      ! f3: stomatal response to VPD
-      IF (qvsata(i,j) - qvref(i,j) <= 12.5) THEN
-        f3 = 1.0 - 0.06*(qvsata(i,j) - qvref(i,j))
-      ELSE
-        f3 = 0.25
-      END IF
+      gcan_out(i,j) = 0.0
+
+      ! f3: Alfieri et al. (2008), air at the reference level
+      VPD_kPa = (qvsata(i,j) - qvref(i,j)) * psfc(i,j) / 622.0
+      vpd_f3_out(i,j)  = VPD_kPa
+      vpd_ref_out(i,j) = VPD_kPa
+      f3 = MAX(0.25, MIN(1.0, 1.0 - 0.1914*VPD_kPa))
       
       ! f4: stomatal response to temperature
       IF (Tref(i,j) >= 302.15) THEN
@@ -1360,12 +1260,6 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
       ELSE
         f34(i,j) = 1.0 / (1.0 + EXP(-0.41 * (Tref(i,j) - 282.05)))
       END IF
-
-      ! f3: stomatal response to VPD
-      !VPD_kPa = (qvsata(i,j) - qvref(i,j)) * psfc(i,j) / 622.0
-
-      ! Hyperbolic formulation (Kim & Verma, 1991)
-      !f3 = 1.0 / (1.0 + 0.13 * VPD_kPa)
 
       uref_nat(i,j) = uref(i,j)
       tref_nat(i,j) = tref(i,j)
@@ -1381,17 +1275,14 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   
   relief = 0.0
   
-  ! Call soilebm_frc for each soil type
-  !DO is = nstyps, 1, -1
-    CALL soilebm_frc(nx, ny, nz, soiltyp, vegtyp, lai, veg, &
+  CALL soilebm_frc_pv(nx, ny, nz, soiltyp, vegtyp, lai, veg, &
                     T_nat, T_soil, wetsfc, wetdp, wetcanp, snowdpth, &
                     qvsfc, uref_nat, psfc, rhosfc, precip, &
                     tref_nat, qvref, cdhref_nat, cdqref_nat, radsw, rnflx, &
                     shflx, lhflx, gflx, ct, &
                     evaprg, evaprtr, evaprr, qvsat_local, qvsata, f34, &
                     frc_tsfc, frc_tdeep, frc_wsfc, frc_wdp, frc_wcnp, &
-                    wrmax, relief)
-  !END DO
+                    wrmax, relief, gcan_out, q_can_out)
   
   ! Extract soil forcings
   frc_nat = frc_tsfc
@@ -1518,7 +1409,6 @@ END SUBROUTINE compute_all_forcings
     real :: theta, gamma, alpha
     real :: sN, sE, sZ
     real :: s_x, s_y, s_z
-    real :: h, sign_x, ratio
 
    real, parameter :: PI = 3.14159265358979323846
 
@@ -1536,22 +1426,18 @@ END SUBROUTINE compute_all_forcings
     s_y = -sin(alpha) * sN + cos(alpha) * sE
     s_z = sZ
 
-    ! Etape 7 : lambda = angle zenithal signe (repere parc)
-    sign_x = 1.0
-    if (s_x < 0.0) sign_x = -1.0
-    if (s_x == 0.0) sign_x = 0.0
-
-    lambda_deg = acos(max(-1.0, min(1.0, s_z))) * sign_x * 180.0 / PI
-
-    ! Etape 8 : phi = azimut relatif a la direction des rangees
-    h = sqrt(s_x**2 + s_y**2)
-    if (h > 0.0) then
-      ratio = s_y / h
+    ! Etape 7 : lambda = angle zenithal du soleil (non signe), version 2
+    lambda_deg = acos(max(-1.0, min(1.0, s_z))) * 180.0 / PI
+    ! Etape 8 : phi = azimut du soleil dans le repere du parc, compte depuis
+    ! la direction des rangees (y) vers la normale avant des panneaux (x) :
+    !   sin(lambda)*sin(phi) = s_x,  sin(lambda)*cos(phi) = s_y
+    ! (convention de PV_LAND_final : tan(lambda)*sin(phi) = tangente de
+    ! l'angle de profil ; le produit n.s = sin(beta) sin(lambda) sin(phi)
+    ! + cos(beta) cos(lambda) est inchange)  [SYLVAIN]
+    if (s_x == 0.0 .and. s_y == 0.0) then
+      phi_deg = 0.0
     else
-      ratio = s_y / 1.0
+      phi_deg = atan2(s_x, s_y) * 180.0 / PI
     end if
-    ratio = max(-1.0, min(1.0, ratio))
-
-    phi_deg = acos(ratio) * 180.0 / PI
 
  end subroutine compute_lambda_phi

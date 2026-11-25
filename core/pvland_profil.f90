@@ -6,7 +6,7 @@
 !##################################################################
 !##################################################################
 
-subroutine compute_U_plus(z, theta, a, beta_deg, L, clearance, theta_0, Lo, Uplus)
+subroutine compute_U_plus(z, theta, a, beta_deg, L, clearance, theta_0, z0_nat, zd_nat, Lo, Uplus)
 
 !============================================================
 ! Purpose:
@@ -24,7 +24,13 @@ subroutine compute_U_plus(z, theta, a, beta_deg, L, clearance, theta_0, Lo, Uplu
 ! L         : PV panel length (panel width) [m]
 ! clearance : clearance height below the panel [m]
 ! theta_0   : park orientation angle [rad]
-! Lo        : Obukhov length [m]. 
+! z0_nat    : roughness length of the natural ground below the panels [m].
+!             Sets the friction coefficient under parallel winds,
+!             beta_m,// = -kappa / ln(z0_nat / z_m) (see beta_theta).
+! zd_nat    : displacement height of the vegetation alone, without
+!             panels [m]. Limit of the displacement height when
+!             lambda_f -> 0 (see zd_par_lambda).
+! Lo        : Obukhov length [m].
 !
 ! Output:
 ! -------
@@ -52,6 +58,8 @@ subroutine compute_U_plus(z, theta, a, beta_deg, L, clearance, theta_0, Lo, Uplu
   real, intent(in)  :: L          ! Panel length (width) [m]
   real, intent(in)  :: clearance  ! Ground clearance [m]
   real, intent(in)  :: theta_0    ! Park orientation angle [rad]
+  real, intent(in)  :: z0_nat     ! Natural ground roughness length [m]
+  real, intent(in)  :: zd_nat     ! Displacement height of the vegetation alone [m]
   real, intent(in)  :: Lo         ! Obukhov length [m] (<0 unstable, >0 stable)
 
   !-------------------------
@@ -82,9 +90,9 @@ subroutine compute_U_plus(z, theta, a, beta_deg, L, clearance, theta_0, Lo, Uplu
 
   ! Select velocity profile depending on height
   if (z >= h_PV) then
-     call U_above(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, Uplus)
+     call U_above(z, theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, Lo, Uplus)
   else
-     call U_within(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, Uplus)
+     call U_within(z, theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, Lo, Uplus)
   endif
 
 end subroutine compute_U_plus
@@ -120,32 +128,40 @@ end subroutine compute_lambda_f
 
 
 !============================================================
-! SUBROUTINE: alpha1_lambda
+! SUBROUTINE: zd_par_lambda
 !
 ! Purpose:
 ! --------
-! Compute coefficient alpha1 as a function of lambda_f.
+! Compute the displacement height under parallel winds as a
+! function of lambda_f.
 !
-! Input:
-! ------
+! Inputs:
+! -------
 ! lambda_f : frontal density [-]
+! h_PV     : canopy height [m]
+! zd_nat   : displacement height of the vegetation alone [m]
 !
 ! Output:
 ! -------
-! alpha1   : displacement scaling coefficient [-]
+! zd_par   : displacement height under parallel winds [m].
+!            Tends to zd_nat when lambda_f -> 0 and to
+!            alpha_inf*h_PV for dense arrays.
 !============================================================
-subroutine alpha1_lambda(lambda_f, alpha1)
+subroutine zd_par_lambda(lambda_f, h_PV, zd_nat, zd_par)
   implicit none
 
   real, intent(in)  :: lambda_f ! Frontal density [-]
-  real, intent(out) :: alpha1   ! Coefficient [-]
+  real, intent(in)  :: h_PV     ! Canopy height [m]
+  real, intent(in)  :: zd_nat   ! Displacement height of the vegetation alone [m]
+  real, intent(out) :: zd_par   ! Displacement height under parallel winds [m]
 
   real, parameter :: alpha_inf = 0.95 / (3.38 + 1.0) ! Asymptotic value [-]
   real, parameter :: lambda_c  = 0.48                ! Transition density [-]
 
-  alpha1 = (alpha_inf - 0.15) * lambda_f**2 / &
-           (lambda_f**2 + lambda_c**2) + 0.15
-end subroutine alpha1_lambda
+  ! Displacement height under parallel winds [m]: tends to zd_nat when
+  ! lambda_f -> 0 and to alpha_inf*h_PV for dense arrays.
+  zd_par = (alpha_inf * h_PV - zd_nat) * lambda_f**2 / (lambda_f**2 + lambda_c**2) + zd_nat
+end subroutine zd_par_lambda
 
 
 !============================================================
@@ -205,27 +221,41 @@ end subroutine A1_gamma
 ! theta     : wind direction [rad]
 ! lambda_f  : frontal density [-]
 ! h_PV      : canopy height [m]
+! theta_0   : park orientation angle [rad]
+! zd_nat    : displacement height of the vegetation alone [m]
 !
 ! Output:
 ! -------
 ! d         : displacement height [m]
+!
+! Note:
+! -----
+!   d = zd_par (A A_w cos^2(theta - theta_0) + 1)
+! with zd_par the displacement height under parallel winds
+! (zd_par_lambda) and A_w = lambda_f^3 / (lambda_f^3 + 0.04^3)
+! (alpha_w). The weight A_w removes the directional amplitude
+! for widely spaced rows, so that d -> zd_nat for all wind
+! directions when lambda_f -> 0.
 !============================================================
-subroutine d_theta(theta, lambda_f, h_PV, theta_0, d)
+subroutine d_theta(theta, lambda_f, h_PV, theta_0, zd_nat, d)
   implicit none
 
   real, intent(in)  :: theta     ! Wind direction [rad]
   real, intent(in)  :: lambda_f  ! Frontal density [-]
   real, intent(in)  :: h_PV      ! Canopy height [m]
   real, intent(in)  :: theta_0   ! Park orientation angle [rad]
+  real, intent(in)  :: zd_nat    ! Displacement height of the vegetation alone [m]
   real, intent(out) :: d         ! Displacement height [m]
 
   real, parameter :: A = 3.38 ! Empirical constant [-]
 
-  real :: alpha1 ! Scaling coefficient [-]
+  real :: zd_par ! Displacement height under parallel winds [m]
+  real :: Aw     ! Density weight of the directional amplitude [-]
 
-  call alpha1_lambda(lambda_f, alpha1)
+  call zd_par_lambda(lambda_f, h_PV, zd_nat, zd_par)
+  call alpha_w(lambda_f, Aw)
 
-  d = alpha1 * (A * cos(theta - theta_0)**2 + 1.0) * h_PV
+  d = zd_par * (A * Aw * cos(theta - theta_0)**2 + 1.0)
 end subroutine d_theta
 
 
@@ -268,30 +298,44 @@ end subroutine r_beta
 ! theta     : wind direction [rad]
 ! lambda_f  : frontal density [-]
 ! beta_deg  : panel tilt angle [deg]
+! theta_0   : park orientation angle [rad]
+! z0_nat    : roughness length of the natural ground [m]
+! z_m       : height at which beta_m is defined, 3.26 h_PV [m]
 !
 ! Output:
 ! -------
 ! beta_t    : directional beta coefficient [-]
+!
+! Note:
+! -----
+! The friction coefficient under parallel winds, beta_m,//, is set by
+! the ground below the panels. It follows from the log law over the
+! bare ground (no panels) written at z_m:
+!     beta_m,// = -kappa / ln(z0_nat / z_m)
 !============================================================
-subroutine beta_theta(theta, lambda_f, beta_deg, theta_0, beta_t)
+subroutine beta_theta(theta, lambda_f, beta_deg, theta_0, z0_nat, z_m, beta_t)
   implicit none
 
   real, intent(in)  :: theta, lambda_f, beta_deg, theta_0
+  real, intent(in)  :: z0_nat, z_m
   real, intent(out) :: beta_t
 
-  real, parameter :: C = 8.72e-2
+  real, parameter :: kappa = 0.387 ! von Karman constant [-] (same as U_above)
   real, parameter :: pi = 3.141592653589793
 
   real :: A1, r
   real :: term1, term2
+  real :: beta_par ! Friction coefficient under parallel winds [-]
 
   call A1_gamma(lambda_f, A1)
   call r_beta(beta_deg, r)
 
+  beta_par = -kappa / log(z0_nat / z_m)
+
   term1 = max(cos(theta - theta_0), 0.0)**2
   term2 = max(cos(theta - theta_0 - pi), 0.0)**2
 
-  beta_t = A1 * term1 + A1 * r * term2 + C
+  beta_t = A1 * term1 + A1 * r * term2 + beta_par
 end subroutine beta_theta
 
 
@@ -308,27 +352,36 @@ end subroutine beta_theta
 ! lambda_f  : frontal density [-]
 ! h_PV      : canopy height [m]
 ! beta_deg  : panel tilt angle [deg]
+! theta_0   : park orientation angle [rad]
+! z0_nat    : roughness length of the natural ground [m]
+! zd_nat    : displacement height of the vegetation alone [m]
 !
 ! Output:
 ! -------
 ! z0        : roughness length [m]
+!
+! Note:
+! -----
+!   z0 = (z_m - d) exp(-kappa / beta_t),   z_m = 3.26 h_PV
 !============================================================
-subroutine z0_theta(theta, lambda_f, h_PV, beta_deg, theta_0, z0)
+subroutine z0_theta(theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, z0)
   implicit none
 
   real, intent(in)  :: theta, lambda_f, h_PV, beta_deg, theta_0
+  real, intent(in)  :: z0_nat
+  real, intent(in)  :: zd_nat   ! Displacement height of the vegetation alone [m]
   real, intent(out) :: z0
 
   real, parameter :: kappa = 0.387 ! von Kármán constant [-]
 
-  real :: z_m     ! Mixing height [m]
+  real :: z_m     ! Height at which beta_t is defined [m]
   real :: d       ! Displacement height [m]
   real :: beta_t  ! Directional beta [-]
 
   z_m = 3.26 * h_PV
 
-  call d_theta(theta, lambda_f, h_PV, theta_0, d)
-  call beta_theta(theta, lambda_f, beta_deg, theta_0, beta_t)
+  call d_theta(theta, lambda_f, h_PV, theta_0, zd_nat, d)
+  call beta_theta(theta, lambda_f, beta_deg, theta_0, z0_nat, z_m, beta_t)
 
   z0 = (z_m - d) * exp(-kappa / beta_t)
 end subroutine z0_theta
@@ -341,27 +394,43 @@ end subroutine z0_theta
 ! --------
 ! Compute coefficient c1 controlling wake effects above canopy.
 !
-! Input:
-! ------
-! theta : wind direction [rad]
+! Inputs:
+! -------
+! theta    : wind direction [rad]
+! theta_0  : park orientation angle [rad]
+! lambda_f : frontal density [-]
 !
 ! Output:
 ! -------
 ! c1    : wake coefficient [-]
+!
+! Note:
+! -----
+! The directional fit below is multiplied by the density weight
+! A_w = lambda_f^3 / (lambda_f^3 + 0.04^3) (alpha_w), so that c1 -> 0
+! (no roughness-sublayer correction) when lambda_f -> 0.
 !============================================================
-subroutine c1_theta(theta, theta_0, c1)
+subroutine c1_theta(theta, theta_0, lambda_f, c1)
   implicit none
 
   real, intent(in)  :: theta
   real, intent(in)  :: theta_0
+  real, intent(in)  :: lambda_f  ! Frontal density [-]
   real, intent(out) :: c1
 
-  real :: val
+  real :: val, t
+  real :: Aw     ! Density weight [-]
 
-  val = 0.28 * exp(1.51 * cos(theta - theta_0)) + &
-        0.18 * exp(1.51 * cos(theta - theta_0 - 3.141592653589793)) - 0.61
+  ! Cosine series (first three harmonics, symmetric about the direction
+  ! perpendicular to the rows) fitted on the five sector values of c1,
+  ! obtained with the RSL function
+  ! psi_hat_m = c1 E1(c2 (z-z_d) / (2 (h_PV-z_d))).
+  ! c1 = 1 - phi_hat_m at the displacement plane (Harman & Finnigan 2007, Eq. 19).
+  t   = theta - theta_0
+  val = 0.19 + 0.23 * cos(t) + 0.32 * cos(2.0 * t) - 0.03 * cos(3.0 * t)
 
-  c1 = max(val, 0.0)
+  call alpha_w(lambda_f, Aw)
+  c1 = Aw * max(val, 0.0)
 end subroutine c1_theta
 
 
@@ -377,6 +446,7 @@ end subroutine c1_theta
 ! -------
 ! theta     : wind direction [rad]
 ! lambda_f  : frontal density [-]
+! theta_0   : park orientation angle [rad]
 !
 ! Output:
 ! -------
@@ -397,8 +467,10 @@ end subroutine c3_theta
 !
 ! Purpose:
 ! --------
-! Compute weighting factor between logarithmic and exponential
-! profiles inside the canopy.
+! Density weight w = lambda_f^3 / (lambda_f^3 + 0.04^3). Used as
+! the weight of the exponential profile inside the canopy (U_within),
+! and to switch off the directional amplitude of d (d_theta) and the
+! RSL correction (c1_theta) for widely spaced rows.
 !
 ! Input:
 ! ------
@@ -406,7 +478,7 @@ end subroutine c3_theta
 !
 ! Output:
 ! -------
-! w        : weighting factor [0Ã¢â‚¬â€œ1]
+! w        : weighting factor [0-1]
 !============================================================
 subroutine alpha_w(lambda_f, w)
   implicit none
@@ -449,8 +521,7 @@ subroutine expint_E1(x, res)
   endif
 
   if (x <= 1.0) then
-     ! Convergent power series (accurate for small x); UNCHANGED so the
-     ! neutral profile is bit-for-bit preserved (its arguments are < 1).
+     ! Convergent power series (accurate for small x).
      sum = 0.0
      term = 1.0
 
@@ -464,8 +535,7 @@ subroutine expint_E1(x, res)
   else
      ! Continued fraction (modified Lentz), convergent for all x >= 1.
      block
-       !real, parameter :: eps = 1.0e-12, fpmin = 1.0e-300
-       real, parameter :: eps = 1.0e-12, fpmin = 1.0e-20 !modif sylvain
+       real, parameter :: eps = 1.0e-12, fpmin = 1.0e-20   ! fpmin: 1e-300 underflows in single precision (ARPS)
        real :: b, c, dd, h, an, del
        integer :: i
        b  = x + 1.0
@@ -504,7 +574,9 @@ end subroutine expint_E1
 !
 !   unstable:  psi_m = 2 ln[(1+x)/2] + ln[(1+x^2)/2]
 !                        - 2 atan(x) + pi/2,    x = (1-16 zeta)^(1/4)
-!   stable:    psi_m = -5 zeta
+!   stable:    psi_m = -5 zeta                (zeta <= zeta_max)
+!              psi_m = -5 zeta_max [1 + ln(zeta / zeta_max)]
+!                                             (zeta >  zeta_max)
 !
 ! psi_m(0) = 0 and the two branches join continuously at zeta = 0.
 !
@@ -518,15 +590,14 @@ end subroutine expint_E1
 !
 ! Note:
 ! -----
-! In strongly stable conditions the linear form -5 zeta grows without
-! bound (and would drive U+ to unphysical values), because the linear
-! Businger-Dyer relation phi_m = 1 + 5 zeta is only valid for weak-to-
-! moderate stability. Field data show a departure from linearity and a
-! transition to "z-less" stratification for zeta greater than about 1
-! (Grachev et al. 2007; Grachev et al. 2013). We therefore cap the
-! stable-side argument at zeta_max (parameter below), i.e. we restrict
-! the linear function to its range of validity. Unstable side is left
-! unchanged (phi_m stays bounded and no runaway occurs there).
+! The linear Businger-Dyer relation phi_m = 1 + 5 zeta is only valid
+! for weak-to-moderate stability; used as is, -5 zeta grows without
+! bound and drives U+ to unphysical values. The similarity function is
+! therefore capped, phi_m = 1 + 5 min(zeta, zeta_max) (zeta_max below),
+! which limits the linear law to its range of validity. The integrated
+! form above is the exact integral of this capped function: beyond
+! zeta_max the gradient stays positive and U+ keeps increasing with
+! height. No cap on the unstable side (phi_m stays bounded there).
 !
 ! NB: zeta_max must be kept identical to the one in psihat_stab_corr.
 !============================================================
@@ -537,12 +608,11 @@ subroutine psi_m_MOST(zeta, psi)
   real, intent(out) :: psi    ! Integrated MOST function [-]
 
   real, parameter :: pi = 3.141592653589793
-  ! Upper bound on the stable stability parameter (validity limit of the
-  ! linear stable flux-profile relation; z-less regime beyond).
+  ! Cap on the argument of the stable similarity function (validity
+  ! limit of the linear stable flux-profile relation).
   real, parameter :: zeta_max = 1.0
 
   real :: x      ! (1 - 16 zeta)^(1/4)
-  real :: zeta_s ! capped stability parameter (stable side)
 
   if (zeta < 0.0) then
      ! Unstable stratification
@@ -553,10 +623,16 @@ subroutine psi_m_MOST(zeta, psi)
          + 0.5 * pi
   else
      ! Stable (and neutral, zeta = 0) stratification.
-     ! Cap the argument at zeta_max: for zeta <= zeta_max the validated
-     ! linear form is used; beyond, psi_m saturates at -5 zeta_max.
-     zeta_s = min(zeta, zeta_max)
-     psi = -5.0 * zeta_s
+     ! Exact integral of the capped similarity function
+     !   phi_m = 1 + 5 min(zeta, zeta_max):
+     !   psi_m = -5 zeta                                 for zeta <= zeta_max
+     !   psi_m = -5 zeta_max [1 + ln(zeta / zeta_max)]   for zeta >  zeta_max
+     ! so that the gradient stays positive and U+ keeps increasing with height.
+     if (zeta <= zeta_max) then
+        psi = -5.0 * zeta
+     else
+        psi = -5.0 * zeta_max * (1.0 + log(zeta / zeta_max))
+     endif
   endif
 end subroutine psi_m_MOST
 
@@ -568,14 +644,15 @@ end subroutine psi_m_MOST
 ! --------
 ! Stability correction to the roughness-sublayer (RSL) function,
 ! following the FULL Harman & Finnigan (2007) formulation, Eq. 15.
-! With their RSL shape (Eq. 19), 1 - phi_hat_m(z') = c1' exp(-a z'),
+! With the RSL shape of HF2007 (Eq. 19), written with z' = height - z_d,
+!   1 - phi_hat_m(z') = c1 exp(-a z'),   a = c2 / (2 (h_PV - z_d)) [1/m],
 ! the neutral limit (phi_m = 1) gives the analytic exponential
-! integral c1' E1(a (z-z_d)) already used in U_above. Here we return
-! ONLY the stability CORRECTION (per unit of the prefactor c1'):
+! integral c1 E1(a (z-z_d)) already used in U_above.
+! Here we return ONLY the stability CORRECTION (per unit of the prefactor c1):
 !
 !   dpsi = INT_{z-z_d}^{inf} [phi_m(z'/Lo) - 1] exp(-a z') / z' dz'
 !
-! so that psi_hat_m = c1' * ( E1(a(z-z_d)) + dpsi ). dpsi -> 0 in
+! so that psi_hat_m = c1 * ( E1(a(z-z_d)) + dpsi ). dpsi -> 0 in
 ! neutral conditions, hence the neutral profile is preserved exactly.
 !
 ! The MOST similarity function phi_m (HF2007 Eq. 10):
@@ -590,13 +667,18 @@ end subroutine psi_m_MOST
 !     Gauss-Laguerre quadrature after the substitution
 !     z' = (z-z_d) + s/a, which maps the integral to INT_0^inf e^{-s} g(s) ds:
 !        dpsi = exp(-a(z-z_d)) * SUM_i w_i [phi_m((..)/Lo)-1]/(a(z-z_d)+s_i).
-!     32 nodes give < 5e-4 absolute error down to Lo = -5 m. No cap is
-!     needed on the unstable side (phi_m stays bounded).
+!     With a = c2/(2(h_PV-z_d)), 32 nodes give an absolute error on dpsi of
+!     about 1e-3 for Lo <= -5 m and at most 6e-3 for Lo down to -1e-3 m
+!     (relative error < 0.4 %), checked against adaptive quadrature for z_d
+!     from the parallel to the perpendicular value and h_PV <= z <= z_ref.
+!     The error stays bounded as Lo -> 0-, since phi_m -> 0 there. No cap is needed on
+!     the unstable side (phi_m stays bounded).
 !
 ! Inputs:
 ! -------
 ! zmd    : z - z_d, height above the virtual origin [m] (> 0)
-! arate  : RSL decay rate a = c2 / (4 (h_PV - z_d)^2), as in U_above
+! arate  : RSL decay rate a = c2 / (2 (h_PV - z_d)) [1/m], as in U_above,
+!          so that a*z' and 5/(a*Lo) are both dimensionless
 ! Lo     : Obukhov length [m]
 !
 ! Output:
@@ -607,7 +689,7 @@ subroutine psihat_stab_corr(zmd, arate, Lo, dpsi)
   implicit none
 
   real, intent(in)  :: zmd     ! z - z_d [m]
-  real, intent(in)  :: arate   ! RSL decay rate a [1/m in the code's convention]
+  real, intent(in)  :: arate   ! RSL decay rate a [1/m]
   real, intent(in)  :: Lo      ! Obukhov length [m]
   real, intent(out) :: dpsi
 
@@ -622,41 +704,41 @@ subroutine psihat_stab_corr(zmd, arate, Lo, dpsi)
 
   ! Gauss-Laguerre nodes (abscissae) for INT_0^inf e^{-s} f(s) ds
   data xgl / &
-    4.44893658332674d-02, 2.34526109519618d-01, &
-    5.76884629301886d-01, 1.07244875381782d+00, &
-    1.72240877644465d+00, 2.52833670642579d+00, &
-    3.49221327302199d+00, 4.61645676974977d+00, &
-    5.90395850417424d+00, 7.35812673318624d+00, &
-    8.98294092421260d+00, 1.07830186325400d+01, &
-    1.27636979867427d+01, 1.49311397555226d+01, &
-    1.72924543367153d+01, 1.98558609403361d+01, &
-    2.26308890131968d+01, 2.56286360224592d+01, &
-    2.88621018163235d+01, 3.23466291539647d+01, &
-    3.61004948057520d+01, 4.01457197715394d+01, &
-    4.45092079957549d+01, 4.92243949873086d+01, &
-    5.43337213333969d+01, 5.98925091621340d+01, &
-    6.59753772879350d+01, 7.26876280906627d+01, &
-    8.01874469779135d+01, 8.87353404178924d+01, &
-    9.88295428682840d+01, 1.11751398097938d+02 /
+    4.44893658332674e-02, 2.34526109519618e-01, &
+    5.76884629301886e-01, 1.07244875381782e+00, &
+    1.72240877644465e+00, 2.52833670642579e+00, &
+    3.49221327302199e+00, 4.61645676974977e+00, &
+    5.90395850417424e+00, 7.35812673318624e+00, &
+    8.98294092421260e+00, 1.07830186325400e+01, &
+    1.27636979867427e+01, 1.49311397555226e+01, &
+    1.72924543367153e+01, 1.98558609403361e+01, &
+    2.26308890131968e+01, 2.56286360224592e+01, &
+    2.88621018163235e+01, 3.23466291539647e+01, &
+    3.61004948057520e+01, 4.01457197715394e+01, &
+    4.45092079957549e+01, 4.92243949873086e+01, &
+    5.43337213333969e+01, 5.98925091621340e+01, &
+    6.59753772879350e+01, 7.26876280906627e+01, &
+    8.01874469779135e+01, 8.87353404178924e+01, &
+    9.88295428682840e+01, 1.11751398097938e+02 /
 
   ! Gauss-Laguerre weights
   data wgl / &
-    1.09218341952425d-01, 2.10443107938792d-01, &
-    2.35213229669843d-01, 1.95903335972874d-01, &
-    1.29983786286068d-01, 7.05786238657156d-02, &
-    3.17609125091740d-02, 1.19182148348382d-02, &
-    3.73881629461142d-03, 9.80803306614925d-04, &
-    2.14864918801358d-04, 3.92034196798780d-05, &
-    5.93454161286845d-06, 7.41640457866734d-07, &
-    7.60456787912055d-08, 6.35060222662562d-09, &
-    4.28138297104074d-10, 2.30589949189124d-11, &
-    9.79937928872677d-13, 3.23780165772916d-14, &
-    8.17182344342055d-16, 1.54213383339381d-17, &
-    2.11979229016355d-19, 2.05442967378800d-21, &
-    1.34698258663736d-23, 5.66129413039746d-26, &
-    1.41856054546297d-28, 1.91337549445399d-31, &
-    1.19224876009820d-34, 2.67151121923966d-38, &
-    1.33861694210642d-42, 4.51053619389878d-48 /
+    1.09218341952425e-01, 2.10443107938792e-01, &
+    2.35213229669843e-01, 1.95903335972874e-01, &
+    1.29983786286068e-01, 7.05786238657156e-02, &
+    3.17609125091740e-02, 1.19182148348382e-02, &
+    3.73881629461142e-03, 9.80803306614925e-04, &
+    2.14864918801358e-04, 3.92034196798780e-05, &
+    5.93454161286845e-06, 7.41640457866734e-07, &
+    7.60456787912055e-08, 6.35060222662562e-09, &
+    4.28138297104074e-10, 2.30589949189124e-11, &
+    9.79937928872677e-13, 3.23780165772916e-14, &
+    8.17182344342055e-16, 1.54213383339381e-17, &
+    2.11979229016355e-19, 2.05442967378800e-21, &
+    1.34698258663736e-23, 5.66129413039746e-26, &
+    1.41856054546297e-28, 1.91337549445399e-31, &
+    1.19224876009820e-34, 2.67151121923966e-38, &
+    1.33861694210642e-42, 4.51053619389878e-48 /
 
   integer :: i
   real :: zeta, phim, s, acc
@@ -714,6 +796,9 @@ end subroutine psihat_stab_corr
 ! lambda_f  : frontal density [-]
 ! h_PV      : canopy height [m]
 ! beta_deg  : panel tilt angle [deg]
+! theta_0   : park orientation angle [rad]
+! z0_nat    : roughness length of the natural ground [m]
+! zd_nat    : displacement height of the vegetation alone [m]
 ! Lo        : Obukhov length [m] (<0 unstable, >0 stable;
 !             0 or |Lo| very large -> neutral)
 !
@@ -733,17 +818,23 @@ end subroutine psihat_stab_corr
 !
 ! (ii) the roughness-sublayer function psi_hat_m, which is itself
 !      stability dependent (HF2007 Eq. 15): phi_m(z'/Lo) sits INSIDE
-!      the RSL integral. We write it as
-!         psi_hat_m = c1 exp(-c2/2) * [ E1(a(z-z_d)) + dpsi(z,Lo) ]
+!      the RSL integral. With the RSL shape of HF2007 (Eq. 19),
+!         phi_hat_m(x) = 1 - c1 exp(-c2 x),  x = (z - z_d) / (2 (h_PV - z_d)),
+!      (c1 = 1 - phi_hat_m at the displacement plane), we write it as
+!         psi_hat_m = c1 * [ E1(a(z-z_d)) + dpsi(z,Lo) ],
+!         a = c2 / (2 (h_PV - z_d))  [1/m],
 !      where E1 is the neutral part and dpsi (from psihat_stab_corr)
 !      is the stability correction. dpsi -> 0 in neutral conditions.
+!      The argument a(z-z_d) of E1 is dimensionless.
 !
-! Both contributions vanish in neutral stratification
+! Both contributions vanish in neutral stratification.
 !============================================================
-subroutine U_above(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, U)
+subroutine U_above(z, theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, Lo, U)
   implicit none
 
   real, intent(in)  :: z, theta, lambda_f, h_PV, beta_deg, theta_0
+  real, intent(in)  :: z0_nat
+  real, intent(in)  :: zd_nat   ! Displacement height of the vegetation alone [m]
   real, intent(in)  :: Lo
   real, intent(out) :: U
 
@@ -756,13 +847,14 @@ subroutine U_above(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, U)
   real :: arate, arg, E1, dpsihat
   real :: psi_z, psi_0   ! MOST stability terms at (z-d) and z0
 
-  call d_theta(theta, lambda_f, h_PV, theta_0, d)
-  call z0_theta(theta, lambda_f, h_PV, beta_deg, theta_0, z0)
-  call c1_theta(theta, theta_0, c1)
+  call d_theta(theta, lambda_f, h_PV, theta_0, zd_nat, d)
+  call z0_theta(theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, z0)
+  call c1_theta(theta, theta_0, lambda_f, c1)
 
   ! Roughness-sublayer function.
-  ! Neutral part: c1 exp(-c2/2) E1(a (z-z_d)), with a the RSL decay rate.
-  arate = c2 / (4.0 * (h_PV - d)**2)
+  ! Neutral part: c1 E1(a (z-z_d)), with a = c2/(2(h_PV-z_d)) [1/m]
+  ! the RSL decay rate (dimensionless argument a (z-z_d)).
+  arate = c2 / (2.0 * (h_PV - d))
   arg   = arate * (z - d)
   call expint_E1(arg, E1)
 
@@ -783,7 +875,7 @@ subroutine U_above(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, U)
 
   U = (1.0 / kappa) * ( log((z - d) / z0)          &
                         - psi_z + psi_0             &
-                        + c1 * exp(-c2 / 2.0) * (E1 + dpsihat) )
+                        + c1 * (E1 + dpsihat) )
 end subroutine U_above
 
 
@@ -801,6 +893,9 @@ end subroutine U_above
 ! lambda_f  : frontal density [-]
 ! h_PV      : canopy height [m]
 ! beta_deg  : panel tilt angle [deg]
+! theta_0   : park orientation angle [rad]
+! z0_nat    : roughness length of the natural ground [m]
+! zd_nat    : displacement height of the vegetation alone [m]
 ! Lo        : Obukhov length [m] (<0 unstable, >0 stable;
 !             0 or |Lo| very large -> neutral)
 !
@@ -816,29 +911,31 @@ end subroutine U_above
 ! their neutral form, consistent with the approach of applying the
 ! MOST correction above the canopy only (Harman & Finnigan 2007).
 !============================================================
-subroutine U_within(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, U)
+subroutine U_within(z, theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, Lo, U)
   implicit none
 
   real, intent(in)  :: z, theta, lambda_f, h_PV, beta_deg, theta_0
+  real, intent(in)  :: z0_nat
+  real, intent(in)  :: zd_nat   ! Displacement height of the vegetation alone [m]
   real, intent(in)  :: Lo
   real, intent(out) :: U
 
   real :: U_h      ! Velocity at canopy top [-]
-  real :: w        ! Weighting factor [-]
-  real :: d_par    ! Displacement height (perpendicular) [m]
-  real :: z0_par   ! Roughness length (perpendicular) [m]
+  real :: w        ! Weight of the exponential part (alpha_w * cos^2) [-]
+  real :: d_par    ! Displacement height for parallel winds [m]
+  real :: z0_par   ! Roughness length for parallel winds [m]
   real :: log_part ! Logarithmic contribution [-]
   real :: exp_part ! Exponential contribution [-]
   real :: c3       ! Decay coefficient [-]
 
   ! Canopy-top velocity: carries the stability correction through Lo
-  call U_above(h_PV, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, U_h)
+  call U_above(h_PV, theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, Lo, U_h)
   call alpha_w(lambda_f, w)
 
   w = w * cos(theta - theta_0)**2
 
-  call d_theta(theta_0 + 3.141592653589793 / 2.0, lambda_f, h_PV, theta_0, d_par)
-  call z0_theta(theta_0 + 3.141592653589793 / 2.0, lambda_f, h_PV, beta_deg, theta_0, z0_par)
+  call d_theta(theta_0 + 3.141592653589793 / 2.0, lambda_f, h_PV, theta_0, zd_nat, d_par)
+  call z0_theta(theta_0 + 3.141592653589793 / 2.0, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, z0_par)
   call c3_theta(theta, lambda_f, theta_0, c3)
 
   log_part = log((z - d_par) / z0_par) / log((h_PV - d_par) / z0_par)
@@ -846,6 +943,8 @@ subroutine U_within(z, theta, lambda_f, h_PV, beta_deg, theta_0, Lo, U)
 
   U = (1.0 - w) * U_h * log_part + w * U_h * exp_part
 end subroutine U_within
+
+
 
 !============================================================
 ! SUBROUTINE: Rib_to_Lobk

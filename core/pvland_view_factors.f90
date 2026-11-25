@@ -18,8 +18,9 @@ SUBROUTINE compute_view_factor_matrix(L, a, w, h_PV, beta, F_matrix)
 ! INPUTS:
 !   L       (REAL) - Panel length [m]
 !   a       (REAL) - Spacing between panels [m]
-!   w       (REAL) - Width of ground surface [m]
-!   h_PV    (REAL) - Total panel height [m]
+!   w       (REAL) - Horizontal projection of the panel, L cos(beta) [m]
+!                       (the ground surface of a pattern is a + w wide)
+!   h_PV    (REAL) - Height of the panel top edge [m]
 !   beta    (REAL) - Tilt angle [radians]
 !
 ! OUTPUTS:
@@ -38,8 +39,8 @@ SUBROUTINE compute_view_factor_matrix(L, a, w, h_PV, beta, F_matrix)
     IMPLICIT NONE
     REAL, INTENT(IN) :: L           ! Panel length
     REAL, INTENT(IN) :: a           ! Spacing between panels
-    REAL, INTENT(IN) :: w           ! Width of ground surface
-    REAL, INTENT(IN) :: h_PV        ! Total panel height
+    REAL, INTENT(IN) :: w           ! Horizontal projection of the panel
+    REAL, INTENT(IN) :: h_PV        ! Height of the panel top edge
     REAL, INTENT(IN) :: beta        ! Tilt angle (radians)
     REAL, INTENT(OUT) :: F_matrix(8,8)  ! View factor matrix
     
@@ -100,19 +101,10 @@ SUBROUTINE compute_view_factor_matrix(L, a, w, h_PV, beta, F_matrix)
     F_matrix(6, 1) = (a + w) / L * F_nat_to_PVb_np1  ! PVb,n+1 -> nat,n (reciprocity)
     F_matrix(3, 7) = (a + w) / L * F_nat_to_PVb_np1  ! PVb,n -> nat,n-1 (reciprocity)
     
-    ! =====================================================================
-    ! SOME VIEW FACTORS FOR PERIPHERAL SURFACES 7 AND 8
-    ! Without these, F_sky(7) and F_sky(8) are too high and matrix may be singular
-    ! =====================================================================
-    
-    ! Surface 7 (nat,n-1) also sees:
-    !F_matrix(7, 4) = F_nat_to_PVb_n       ! nat,n-1 -> PVb,n-1 (same geometry as nat,n -> PVb,n)
-    !F_matrix(4, 7) = (a + w) / L * F_nat_to_PVb_n  ! reciprocity
-    
-    ! Surface 8 (nat,n+1) also sees:
-    !F_matrix(8, 6) = F_nat_to_PVb_n       ! nat,n+1 -> PVb,n+1 (same geometry)
-    !F_matrix(6, 8) = (a + w) / L * F_nat_to_PVb_n  ! reciprocity
-    
+    ! The rows of the peripheral surfaces 4-8 are incomplete (only the factors
+    ! towards pattern n are filled): only the surfaces of pattern n (1-3) have
+    ! a complete row, see compute_sky_view_factors.
+
 END SUBROUTINE compute_view_factor_matrix
 
 
@@ -137,7 +129,7 @@ SUBROUTINE compute_F_nat_to_PVb_n(L, a, w, h_clear, beta, F)
 ! INPUTS:
 !   L        (REAL) - Panel length [m]
 !   a        (REAL) - Spacing between panels [m]
-!   w        (REAL) - Width of ground surface [m]
+!   w        (REAL) - Horizontal projection of the panel, L cos(beta) [m]
 !   h_clear  (REAL) - Clearance height [m]
 !   beta     (REAL) - Tilt angle [radians]
 !
@@ -187,7 +179,7 @@ SUBROUTINE compute_F_nat_to_PVf_nm1(L, a, w, h_clear, beta, F)
 ! INPUTS:
 !   L        (REAL) - Panel length [m]
 !   a        (REAL) - Spacing between panels [m]
-!   w        (REAL) - Width of ground surface [m]
+!   w        (REAL) - Horizontal projection of the panel, L cos(beta) [m]
 !   h_clear  (REAL) - Clearance height [m]
 !   beta     (REAL) - Tilt angle [radians]
 !
@@ -251,7 +243,7 @@ SUBROUTINE compute_F_nat_to_PVb_nm1(L, a, w, h_clear, beta, F)
 ! INPUTS:
 !   L        (REAL) - Panel length [m]
 !   a        (REAL) - Spacing between panels [m]
-!   w        (REAL) - Width of ground surface [m]
+!   w        (REAL) - Horizontal projection of the panel, L cos(beta) [m]
 !   h_clear  (REAL) - Clearance height [m]
 !   beta     (REAL) - Tilt angle [radians]
 !
@@ -322,8 +314,8 @@ SUBROUTINE compute_F_nat_to_PVb_np1(L, a, w, h_PV, h_clear, beta, F)
 ! INPUTS:
 !   L        (REAL) - Panel length [m]
 !   a        (REAL) - Spacing between panels [m]
-!   w        (REAL) - Width of ground surface [m]
-!   h_PV     (REAL) - Total panel height [m]
+!   w        (REAL) - Horizontal projection of the panel, L cos(beta) [m]
+!   h_PV     (REAL) - Height of the panel top edge [m]
 !   h_clear  (REAL) - Clearance height [m]
 !   beta     (REAL) - Tilt angle [radians]
 !
@@ -339,31 +331,20 @@ SUBROUTINE compute_F_nat_to_PVb_np1(L, a, w, h_PV, h_clear, beta, F)
     REAL :: h_sin, L_h_sin, x1, x2, delta_x0, delta_x1
     REAL, PARAMETER :: eps = 0.01
     
-    ! Handle special case: beta = 0 (horizontal panels)
     IF (ABS(beta) < eps) THEN
-		term1 = SQRT(a*a + h_PV*h_PV)
-		term2 = SQRT(4*(a+L)*(a+L) + h_PV*h_PV)
-		term3 = SQRT((a+L)*(a+L) + h_PV*h_PV)
-		term4 = SQRT((2*a+L)*(2*a+L) + h_PV*h_PV)
-        F = (term1 + term2 - term3 - term4) / (2*(a + L))
+        delta_x1 = HUGE(1.0)
     ELSE
-		! Compute delta_x0 and delta_x1 locally
-		delta_x0 = h_clear / TAN(beta)
-		delta_x1 = MAX(a+w, a * h_clear / (h_PV - h_clear))
-		
-		h_sin = h_clear / SIN(beta)
-		L_h_sin = L + h_sin
-		x1 = a + w + delta_x0
-		x2 = x1 + delta_x1
-		
-		term1 = SQRT(x1**2 - 2*x1*L_h_sin*COS(beta) + L_h_sin**2)
-		term2 = SQRT(x2**2 - 2*x2*delta_x0 + h_sin**2)
-		term3 = SQRT(x2**2 - 2*x2*L_h_sin*COS(beta) + L_h_sin**2)
-		term4 = SQRT(x1**2 - 2*x1*delta_x0 + h_sin**2)
-    	F = (term1 + term2 - term3 - term4) / (2*(a + w))
-	END IF
-	
-	F = MAX(0.0, F)
+        delta_x1 = a * h_clear / (h_PV - h_clear)
+    END IF
+    term1 = SQRT(a*a + h_PV*h_PV)
+    term2 = SQRT(4.0*(a+w)**2 + h_clear*h_clear)
+    term4 = SQRT((a+w)**2 + h_clear*h_clear)
+    IF (delta_x1 < a + w) THEN
+        term3 = term4 + SQRT(a*a + (h_PV - h_clear)**2)
+    ELSE
+        term3 = SQRT((2.0*a + w)**2 + h_PV*h_PV)
+    END IF
+    F = MAX(0.0, (term1 + term2 - term3 - term4) / (2.0*(a + w)))
 
 END SUBROUTINE compute_F_nat_to_PVb_np1
 

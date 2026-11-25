@@ -6,14 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 PV-LAND offline: a Fortran 90 land-surface model for a ground-mounted photovoltaic park, forced by measured meteorological data. It computes the energy balance of the natural ground surface, the soil and the PV panels (front glass / cell / back), and compares modelled fluxes (H, LE, Rn, G) with measurements. The user writes in French.
 
-**ARPS is the reference.** The same PV-LAND code runs coupled in ARPS (`../arps5.3.4_PVLAND`, `sfcphy = 5`; GitHub `sylllvain/arps_pvland`). This repository is only an offline driver around exact copies of the ARPS sources, so that PV-LAND changes can be moved between both models without manual porting. See `README.md` (French) for the user-facing summary.
+**Version 2 (branch `v2`).** This worktree holds PV-LAND version 2: the physics of `../PV_LAND_final` (2025: model Obukhov length, canopy-air humidity `q_can`, PV-LAND soil copies, `dragcoef_pv` with zt/z0, new panel convection and wind profile, sin(phi) shading) inside the version-1 structure. Branch `main` (`../PVLAND_24july2026`) is version 1. `ref_PV_LAND_final/` (git-ignored) holds PV_LAND_final built with `ifx -r8` and its outputs, the validation reference (`scripts/compare_outputs.py`).
+
+**ARPS is the reference.** The same PV-LAND code runs coupled in ARPS (`../arps5.3.4_PVLAND_v2`, branch `v2` of `sylllvain/arps_pvland`, `sfcphy = 5`). This repository is only an offline driver around exact copies of the ARPS sources, so that PV-LAND changes can be moved between both models without manual porting. See `README.md` (French) for the user-facing summary.
 
 ## Layout and the "do not edit" rule
 
 - `core/`: PV-LAND physics, verbatim copies of ARPS `src/arps/module_pvland.f90`, `pvland.f90` (`INIT_PVLAND`, `DRAG_PVLAND`, `solve_air_node_temperatures`, `compute_all_forcings`, `compute_lambda_phi`), `pvland_profil.f90`, `pvland_view_factors.f90`, `pvland_solar_radiation.f90`, `pvland_radiosity_SW/LW.f90`, and `pvland_driver.f90` (module `pvland_sfcphy_work` + `SUBROUTINE pvland_sfcphy`: one PV-LAND time step, called by ARPS `sfcphy3d.f90` for `sfcphy == 5` and by the offline main program).
 - `arps_lib/`: ARPS routines used by PV-LAND: `soilebm3d.f90`, `thermolib3d.f90` (verbatim), `sfcphy3d_extract.f90` (`sfcflx`, `dragcoef`, `cuc`, `cptc`, `cucwtr`, `cptcwtr`, `cuneuwtr`, `cptneuwtr` extracted from ARPS `sfcphy3d.f90`), `tmix3d_extract.f90` (`tridiag2`), and `include/*.inc`.
 - Outside the park (`pv_park = 0`), `pvland_sfcphy` reproduces ARPS `sfcphy = 4` (dragcoef + sfcflx + soilebm): wind `wdspsfc`, air `tair`/`qvair` averaged over levels 1-2, drag coefficients from `tsoil`/`qvsfc`, fluxes to the atmosphere at t^n, `nsfcst` soil sub-steps, fluxes weighted by `stypfrct`, `qvsfc` updated (checked on test_sylvain: equal to sfcphy = 4 to rounding). In the offline model `nsfcst = 1` and the main loop count is `nstep_frc`.
-- `pvland_sfcphy(..., meas_opt, S_diffuse_in, lambda_in, phi_in, L_obk_in)`: ARPS passes `meas_opt = 0` (diffuse SW from `split_sw`, lambda/phi from `compute_lambda_phi`, Obukhov length from the previous-step fluxes, bounded to zeta >= -5); the offline model passes `meas_opt = 1` (measured values; the zeta bound still applies). The offline output reads `uref`, `cdh_can`, `cdh_PVa` from module `pvland_sfcphy_work`.
+- `pvland_sfcphy(..., meas_opt, S_diffuse_in, lambda_in, phi_in)`: ARPS passes `meas_opt = 0` (diffuse SW from `split_sw`, lambda/phi from `compute_lambda_phi`); the offline model passes `meas_opt = 1` (measured values). In both, the Obukhov length is a PV-LAND state updated by `obukhov_update` after the 2nd RK2 call (fluxes H_ref, LE_nat, u* of the step), and the canopy-air humidity `q_can` (module_pvland_out) is updated at the same point. `q_can`, `L_obk`, `T_can`, `T_PVa` (with `T_PVf`, `T_cell`, `T_PVb`, `ptsfc_eff`, `qvsfc_eff`) are allocated by the host (ARPS `arps.f90`, offline main program), set by `INIT_PVLAND` only when `initopt = 1`, and saved in the ARPS restart files (`rst3d.f90`): a restart reproduces the continuous run exactly (checked on test_sylvain). Restart files of version 1 cannot be read by version 2. The offline output reads `uref`, `cdh_can`, `cdh_PVa`, `cdh_nat`, `L_obk`, `u_star_pv`, `q_can_loc`, `vpd_*_loc` from module `pvland_sfcphy_work`.
 - `offline/pvland_offline_main.f90` and `offline/pvland_park_map.f90`: the only hand-written offline-specific Fortran.
 - `legacy/`: old offline sources, not built.
 
@@ -26,8 +28,8 @@ Host-specific hook: `INIT_PVLAND` calls `pvland_park_map(nx,ny,pv_park,tem1)`; A
 ```bash
 make              # build pv_land.exe (objects and .mod in build/)
 make run          # full forcing, ~2 min
-make run-short    # 5-day forcing recorded_data_short_5days.csv, ~15 s
-make check-arps   # compare with ../arps5.3.4_PVLAND (ARPS_DIR=... to override)
+make run-short    # 5-day forcing recorded_data_2025_short_5days.csv, ~1 s
+make check-arps   # compare with ../arps5.3.4_PVLAND_v2 (ARPS_DIR=... to override)
 make sync-arps    # copy from ARPS
 make rebuild
 ```
@@ -40,7 +42,7 @@ make rebuild
 
 ## Inputs / outputs
 
-- Forcing: first command-line argument, default `recorded_data_adjusted_daily_summer_2025.csv`. Columns read by position: `t, wind_speed, wind_dir, T6 (°C), specific_humidity, Rain, SWout, SWin, LWout, LWin, air_pressure, air_density, H, LE, G, RN, SW_diffus, lambda, phi, L (Obukhov length)`. Rows 30 min apart. `lambda`/`phi` (rad, park frame) are precomputed by the standalone `calcul_angle_zen_azi_sylvain_v2.f90`.
+- Forcing: first command-line argument, default `recorded_data_2025.csv` (from PV_LAND_final). Columns read by position: `t, wind_speed, wind_dir, T6 (°C), specific_humidity (kg/kg), Rain, SWout, SWin, LWout, LWin, air_pressure, air_density, H, LE, G, RN, SW_diffus, lambda, phi`. Rows 30 min apart. `lambda` = solar zenith angle, `phi` = solar azimuth in the park frame (from the row direction towards the front normal), rad; ARPS computes them with `compute_lambda_phi` in the same convention. No Obukhov length column: L is computed by the model. Outputs `pv_land_output_2025.csv` and `pv_diag_energy_balance_2025.csv` have the PV_LAND_final columns, read by the Python scripts of `analysis/` (measurements: `measured_data_2025.csv`).
 - Outputs: `pv_land_output.csv` and `pv_diag_energy_balance.csv` (same columns as before the restructuring).
 - PV park parameters: namelist `&pvland` (module `pvland_nml` in `core/module_pvland.f90`, which holds the defaults and a one-line description of each parameter). Offline: file `pvland.nml` (2nd command-line argument, default `pvland.nml`), read by `pvland_offline_main` before `INIT_PVLAND`. ARPS: block `&pvland` of `arps.input` after `&soil_ebm`, read by `initpara` only when `sfcphy = 5`. `INIT_PVLAND` copies the scalars into the `(nx,ny)` arrays of `module_pvland_in`. `pv_park_opt`/`pv_park_i1..j2` place the park on the ARPS grid; offline, `pv_park_opt = 2` runs the column without PV panels. Everything derived from the tilt `beta` (h_clear, width, lambda_f_park, z_can, z_PVa, view factors, radiosity LU factors) is computed by `pvland_geometry`: once in `INIT_PVLAND` when `vf_update_opt = 0`, or at every `pvland_sfcphy` step when `vf_update_opt = 1` (moving panels; no tracking law for `beta` is implemented yet). Site parameters (z0_nat, soil/vegetation types, initial soil state, `dtsfc = 2 s`): top of `offline/pvland_offline_main.f90`.
 

@@ -29,6 +29,9 @@ MODULE module_pvland_out
   REAL, ALLOCATABLE :: T_can(:,:), T_PVa(:,:)
   REAL, ALLOCATABLE :: T_PVf(:,:), T_cell(:,:), T_PVb(:,:), ptsfc_eff(:,:), qvsfc_eff(:,:)
   REAL, ALLOCATABLE :: U_can(:,:), U_PVa(:,:)
+  ! PV-LAND state of version 2, saved in the ARPS restart files
+  REAL, ALLOCATABLE :: q_can(:,:)     ! Specific humidity of the canopy air (kg/kg); < 0: not set yet
+  REAL, ALLOCATABLE :: L_obk(:,:)     ! Obukhov length (m), 0 = neutral
 
   REAL, ALLOCATABLE   :: H_ref(:,:),Rn_ref(:,:)
   REAL, ALLOCATABLE   :: H_nat(:,:), LE_nat(:,:), G_nat(:,:), Rn_nat(:,:)
@@ -77,8 +80,8 @@ MODULE module_pvland_in
 !--------------------------------------------------------------------
   REAL, ALLOCATABLE, DIMENSION (:,:) :: pv_park
   REAL, ALLOCATABLE, DIMENSION (:,:) :: a, beta, L, width, z_PVa,&
-  h_PV, h_clear, lambda_f_park, l_nat_can,l_PVb_can,l_PVf_PVa, l_can_ref, theta_0,&
-  z0_PV_back, z0_PV_front, albedo_nat, albedo_PVf, albedo_PVb, &
+  h_PV, h_clear, lambda_f_park, l_nat_can, theta_0,&
+  albedo_nat, albedo_PVf, albedo_PVb, &
                              emiss_nat, emiss_PVf, emiss_PVb, z_can
 
   REAL, ALLOCATABLE, DIMENSION (:,:)   :: delta_PVf, delta_cell, delta_PVb, &
@@ -319,7 +322,7 @@ MODULE pvland_nml
   INTEGER :: vf_update_opt = 0      ! View factors, sky view factors, radiosity LU factors and tilt-derived geometry: 0 = computed once at initialisation (fixed panels), 1 = recomputed at every PV-LAND time step (moving panels)
 
   ! ---- Location of the PV park (offline: the single column is in the park or not) ----
-  INTEGER :: pv_park_opt = 0        ! 0 = PV park over the whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2, 2 = no PV park (natural ground only, as sfcphy = 4)
+  INTEGER :: pv_park_opt = 0        ! 0 = PV park over the whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2, 2 = no PV park (natural ground only, with the PV-LAND soil physics)
   INTEGER :: pv_park_i1 = 1         ! First global x index (scalar point) of the PV park (pv_park_opt = 1)
   INTEGER :: pv_park_i2 = 99999     ! Last global x index of the PV park, clipped to the domain (pv_park_opt = 1)
   INTEGER :: pv_park_j1 = 1         ! First global y index (scalar point) of the PV park (pv_park_opt = 1)
@@ -333,50 +336,71 @@ MODULE pvland_nml
   REAL :: pv_theta_0_deg = -3.0     ! Park orientation angle used by the wind profile (deg)
   REAL :: pv_az_park = 177.0        ! Meteorological azimuth faced by the panel fronts (deg)
 
-  ! ---- Roughness lengths ----
-  REAL :: pv_z0_PV_back = 0.0002    ! Roughness length of the panel back surface (m)
-  REAL :: pv_z0_PV_front = 0.0002   ! Roughness length of the panel front surface (m)
+  ! ---- Natural vegetation of the park (wind profile, version 2) ----
+  REAL :: pv_zd_nat = 0.285         ! Displacement height of the natural vegetation alone (m); its roughness z0 is roufns
+  REAL :: pv_ztz0_nat = 0.1         ! Ratio zt/z0 of thermal to momentum roughness, natural ground -> canopy air (-)
+  REAL :: pv_ztz0_air = 1.0         ! Ratio zt/z0, canopy air and air above the panels -> reference level (-)
 
   ! ---- Radiative properties ----
   REAL :: pv_albedo_nat = 0.22      ! Albedo of the natural ground surface (-)
   REAL :: pv_albedo_PVf = 0.11      ! Albedo of the panel front (-)
   REAL :: pv_albedo_PVb = 0.11      ! Albedo of the panel back (-)
   REAL :: pv_emiss_nat = 0.98       ! Emissivity of the natural ground surface (-)
-  REAL :: pv_emiss_PVf = 0.79       ! Emissivity of the panel front (-)
-  REAL :: pv_emiss_PVb = 0.80       ! Emissivity of the panel back (-)
+  REAL :: pv_emiss_PVf = 0.81       ! Emissivity of the panel front (-)
+  REAL :: pv_emiss_PVb = 0.845      ! Emissivity of the panel back (-)
 
-  ! ---- Interface lengths of the neutral exchange coefficients ----
-  REAL :: pv_l_PVb_can = 0.015      ! Panel back to canopy air (m), Eq. 6.7-6.9
-  REAL :: pv_l_PVf_PVa = 0.015      ! Panel front to air above the panels (m), Eq. 6.11-6.13
+  ! ---- Convection on the panel faces ----
+  REAL :: pv_C_for_f = 6.80         ! Forced convection, front face: h = C_for_f * U_PVa**p_for_f (W/m2/K)
+  REAL :: pv_C_for_b = 6.80         ! Forced convection, back face: h = C_for_b * U_can**p_for_b (W/m2/K)
+  REAL :: pv_p_for_f = 0.80         ! Wind exponent of the forced convection, front face (-)
+  REAL :: pv_p_for_b = 0.80         ! Wind exponent of the forced convection, back face (-)
+  REAL :: pv_fac_h_free = 2.50      ! Scaling of the free convection of Kaplani & Kaplanis (2014) (-)
 
-  ! ---- PV module, 3-node thermal model (Table 3, Khyani et al. 2023) ----
-  REAL :: pv_delta_PVf = 3.2e-3     ! Equivalent thickness of the front node (m)
-  REAL :: pv_delta_cell = 0.5e-3    ! Equivalent thickness of the cell node (m)
-  REAL :: pv_delta_PVb = 0.5e-3     ! Equivalent thickness of the back node (m)
-  REAL :: pv_rho_cp_PVf = 1.6e6     ! Volumetric heat capacity of the front node (J/m3/K)
-  REAL :: pv_rho_cp_cell = 1.6e6    ! Volumetric heat capacity of the cell node (J/m3/K)
-  REAL :: pv_rho_cp_PVb = 1.8e6     ! Volumetric heat capacity of the back node (J/m3/K)
+  ! ---- Obukhov length (computed by PV-LAND from its own fluxes) ----
+  REAL :: pv_tau_L = 300.0          ! Relaxation time of 1/L towards the instantaneous value (s), 0 = no relaxation
+  REAL :: pv_L_floor = 0.5          ! Minimum |L| (m)
+
+  ! ---- PV module, 3-node thermal model ----
+  REAL :: pv_delta_PVf = 3.8e-3     ! Equivalent thickness of the front node (m)
+  REAL :: pv_delta_cell = 0.225e-3  ! Equivalent thickness of the cell node (m)
+  REAL :: pv_delta_PVb = 1.1e-3     ! Equivalent thickness of the back node (m)
+  REAL :: pv_rho_cp_PVf = 1.580e6   ! Volumetric heat capacity of the front node (J/m3/K)
+  REAL :: pv_rho_cp_cell = 1.577e6  ! Volumetric heat capacity of the cell node (J/m3/K)
+  REAL :: pv_rho_cp_PVb = 1.776e6   ! Volumetric heat capacity of the back node (J/m3/K)
   REAL :: pv_k_glass = 1.8          ! Thermal conductivity of the glass (W/m/K)
-  REAL :: pv_k_EVA = 0.33           ! Thermal conductivity of the EVA (W/m/K)
+  REAL :: pv_k_EVA = 0.35           ! Thermal conductivity of the EVA (W/m/K)
   REAL :: pv_k_backsheet = 0.20     ! Thermal conductivity of the backsheet (W/m/K)
-  REAL :: pv_delta_glass = 2.2e-3   ! Thickness of the glass sub-layer (m)
-  REAL :: pv_delta_EVA_top = 1.0e-3 ! Thickness of the top EVA sub-layer (m)
-  REAL :: pv_delta_EVA_bot = 0.5e-3 ! Thickness of the bottom EVA sub-layer (m)
+  REAL :: pv_delta_glass = 3.2e-3   ! Thickness of the glass sub-layer (m)
+  REAL :: pv_delta_EVA_top = 0.6e-3 ! Thickness of the top EVA sub-layer (m)
+  REAL :: pv_delta_EVA_bot = 0.6e-3 ! Thickness of the bottom EVA sub-layer (m)
   REAL :: pv_delta_backsheet = 0.5e-3 ! Thickness of the backsheet sub-layer (m)
   REAL :: pv_eta_STC = 0.18         ! PV efficiency at standard test conditions (25 C, 1000 W/m2) (-)
   REAL :: pv_gamma_PV = 0.0045      ! Temperature coefficient of the PV efficiency (1/K)
 
+  ! ---- Soil of the PV-LAND points (soilebm_frc_pv/evapflx_pv; a negative value keeps the ARPS table, soilcst.inc) ----
+  REAL :: pv_cgv = 3.0e-5           ! Thermal coefficient of the vegetation cgv (K m2/J); ARPS: 1.5e-5
+  REAL :: pv_wsat = 0.315           ! Saturated volumetric moisture content (m3/m3), all soil types
+  REAL :: pv_wfc = 0.135            ! Field capacity (m3/m3), all soil types
+  REAL :: pv_wwlt = 0.05            ! Wilting point (m3/m3), all soil types
+  REAL :: pv_rsmin = 70.0           ! Minimum stomatal resistance (s/m), all vegetation types
+  REAL :: pv_wref = 0.219           ! Moisture threshold of the transpiration stress and of the bare-soil evaporation (m3/m3)
+  INTEGER :: pv_drain_opt = 1       ! Drainage of the deep reservoir: 0 = off, 1 = on (c3 * max(w2 - wfc, 0) / tau)
+  REAL :: pv_c3_drain = 0.1         ! Drainage coefficient c3 (-)
+
   NAMELIST /pvland/ vf_update_opt,                                       &
            pv_park_opt, pv_park_i1, pv_park_i2, pv_park_j1, pv_park_j2,  &
            pv_L, pv_a, pv_beta_deg, pv_h_PV, pv_theta_0_deg, pv_az_park, &
-           pv_z0_PV_back, pv_z0_PV_front,                                &
+           pv_zd_nat, pv_ztz0_nat, pv_ztz0_air,                          &
            pv_albedo_nat, pv_albedo_PVf, pv_albedo_PVb,                  &
            pv_emiss_nat, pv_emiss_PVf, pv_emiss_PVb,                     &
-           pv_l_PVb_can, pv_l_PVf_PVa,                                   &
+           pv_C_for_f, pv_C_for_b, pv_p_for_f, pv_p_for_b, pv_fac_h_free, &
+           pv_tau_L, pv_L_floor,                                         &
            pv_delta_PVf, pv_delta_cell, pv_delta_PVb,                    &
            pv_rho_cp_PVf, pv_rho_cp_cell, pv_rho_cp_PVb,                 &
            pv_k_glass, pv_k_EVA, pv_k_backsheet,                         &
            pv_delta_glass, pv_delta_EVA_top, pv_delta_EVA_bot,           &
-           pv_delta_backsheet, pv_eta_STC, pv_gamma_PV
+           pv_delta_backsheet, pv_eta_STC, pv_gamma_PV,                  &
+           pv_cgv, pv_wsat, pv_wfc, pv_wwlt, pv_rsmin, pv_wref,          &
+           pv_drain_opt, pv_c3_drain
 
 END MODULE pvland_nml

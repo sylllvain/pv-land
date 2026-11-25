@@ -32,12 +32,17 @@
 
 PROGRAM pvland_offline_main
 
-  USE module_pvland_in,  ONLY : h_PV, albedo_nat, emiss_nat
+  USE module_pvland_in,  ONLY : h_PV, albedo_nat, emiss_nat, z0_park, zd_park
   USE module_pvland_out
   USE pvland_nml,        ONLY : pvland      ! namelist &pvland (PV park parameters)
   USE pvland_sfcphy_work, ONLY : uref_diag => uref,                    &
                                  cdh_can_diag => cdh_can,              &
-                                 cdh_PVa_diag => cdh_PVa
+                                 cdh_PVa_diag => cdh_PVa,              &
+                                 cdh_nat_diag => cdh_nat,              &
+                                 u_star_diag => u_star_pv,             &
+                                 q_can_diag => q_can_loc,              &
+                                 vpd_f3_diag => vpd_f3_loc,            &
+                                 vpd_ref_diag => vpd_ref_loc
 
   IMPLICIT NONE
 
@@ -58,14 +63,14 @@ PROGRAM pvland_offline_main
   ! ====== Site parameters (natural surface, soil, initial state) ======
   ! The PV park geometry and optical properties are set in INIT_PVLAND
   ! (core/pvland.f90), as in ARPS.
-  REAL, PARAMETER :: z0_nat     = 0.05      ! Natural surface roughness (m) -> roufns
+  REAL, PARAMETER :: z0_nat     = 0.073     ! Natural surface roughness (m) -> roufns
   REAL, PARAMETER :: veg_site   = 0.95      ! Vegetation fraction
   INTEGER, PARAMETER :: vegtyp_site  = 3
   REAL, PARAMETER :: lai_site   = 2.
-  INTEGER, PARAMETER :: soiltyp_site = 6
-  REAL, PARAMETER :: tdeep_ini  = 20.95 + 273.15   ! Initial deep soil temperature (K)
-  REAL, PARAMETER :: wetsfc_ini = 0.11      ! Initial surface soil moisture (m3/m3)
-  REAL, PARAMETER :: wetdp_ini  = 0.10      ! Initial deep soil moisture (m3/m3)
+  INTEGER, PARAMETER :: soiltyp_site = 1
+  REAL, PARAMETER :: tdeep_ini  = 20.7 + 273.15    ! Initial deep soil temperature (K)
+  REAL, PARAMETER :: wetsfc_ini = 0.125     ! Initial surface soil moisture (m3/m3)
+  REAL, PARAMETER :: wetdp_ini  = 0.115     ! Initial deep soil moisture (m3/m3)
 
   ! ====== File I/O ======
   INTEGER :: temp, ios, t, it, k
@@ -83,7 +88,6 @@ PROGRAM pvland_offline_main
   REAL, ALLOCATABLE :: pref_input(:), rhoref_input(:)
   REAL, ALLOCATABLE :: phi_input(:), lambda_input(:), S_diffuse_input(:)
   REAL, ALLOCATABLE :: H_meas(:), LE_meas(:), Rn_meas(:), G_meas(:)
-  REAL, ALLOCATABLE :: Lobk_input(:)    ! Obukhov length L [m]
 
   ! ====== ARPS-like atmospheric state (single column) ======
   REAL :: u(nx,ny,nz), v(nx,ny,nz), w(nx,ny,nz)
@@ -111,7 +115,7 @@ PROGRAM pvland_offline_main
   REAL :: pt1(nx,ny), tair(nx,ny), qvair(nx,ny)   ! set by pvland_sfcphy
 
   ! ====== Measured forcing replacing ARPS diagnostics ======
-  REAL :: S_diffuse_in(nx,ny), lambda_in(nx,ny), phi_in(nx,ny), L_obk_in(nx,ny)
+  REAL :: S_diffuse_in(nx,ny), lambda_in(nx,ny), phi_in(nx,ny)
 
   !=====================================================================
   ! INITIALIZATION
@@ -145,7 +149,7 @@ PROGRAM pvland_offline_main
   ! READ CSV INPUT
   !=====================================================================
 
-  forcing_file = 'recorded_data_adjusted_daily_summer_2025.csv'
+  forcing_file = 'recorded_data_2025.csv'
   IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, forcing_file)
 
   WRITE(*,*) 'Reading forcing data from CSV: ', TRIM(forcing_file)
@@ -155,7 +159,7 @@ PROGRAM pvland_offline_main
            swin_input(ntot_max), lwout_input(ntot_max), lwin_input(ntot_max), &
            pref_input(ntot_max), rhoref_input(ntot_max), phi_input(ntot_max), &
            lambda_input(ntot_max), S_diffuse_input(ntot_max), H_meas(ntot_max), &
-           LE_meas(ntot_max), Rn_meas(ntot_max), G_meas(ntot_max), Lobk_input(ntot_max))
+           LE_meas(ntot_max), Rn_meas(ntot_max), G_meas(ntot_max))
 
   OPEN(UNIT=10, FILE=TRIM(forcing_file), STATUS='old')
   READ(10,*)  ! Skip header
@@ -170,8 +174,7 @@ PROGRAM pvland_offline_main
                             lwout_input(temp), lwin_input(temp), &
                             pref_input(temp), rhoref_input(temp), &
                             H_meas(temp), LE_meas(temp), G_meas(temp), Rn_meas(temp), &
-                            S_diffuse_input(temp), lambda_input(temp), phi_input(temp), &
-                            Lobk_input(temp)
+                            S_diffuse_input(temp), lambda_input(temp), phi_input(temp)
     tref_input(temp) = tref_input(temp) + 273.15
     IF (ios /= 0) EXIT
     temp = temp + 1
@@ -198,6 +201,8 @@ PROGRAM pvland_offline_main
 
   ! Arrays allocated by arps.f90 in ARPS
   ALLOCATE(T_PVf(nx,ny), T_cell(nx,ny), T_PVb(nx,ny), ptsfc_eff(nx,ny), qvsfc_eff(nx,ny))
+  ALLOCATE(q_can(nx,ny), L_obk(nx,ny))   ! PV-LAND version 2 state (restart in ARPS)
+  ALLOCATE(T_can(nx,ny), T_PVa(nx,ny))   ! PV-LAND air nodes (restart in ARPS)
 
   ! PV-LAND parameters: namelist &pvland (same as in ARPS arps.input)
   nml_file = 'pvland.nml'
@@ -237,15 +242,17 @@ PROGRAM pvland_offline_main
   ! OPEN OUTPUT CSVs
   !=====================================================================
 
-  OPEN(UNIT=20, FILE='pv_land_output.csv', STATUS='replace')
+  OPEN(UNIT=20, FILE='pv_land_output_2025.csv', STATUS='replace')
   WRITE(20,'(A)') 'timestep,H_meas,H_model,LE_meas,LE_model,' // &
                   'Rn_meas,Rn_model,G_meas,G_model,' // &
                   'T_nat,T_soil,T_PVf,T_cell,T_PVb,T_can,T_PVa,T_ref,' // &
                   'qsoil_surf,qsoil_deep,' // &
                   'SW_out_sky,LW_out_sky,H_nat,H_PVa_ref,H_can_ref,' // &
-                  'G_SW_nat,J_SW_nat,G_LW_nat,J_LW_nat'
+                  'G_SW_nat,J_SW_nat,G_LW_nat,J_LW_nat,L_obk,' // &
+                  'q_ref,q_can,q_can_minus_q_ref,vpd_f3,vpd_qref,' // &
+                  'z0_park,zd_park,u_star,cdh_nat'
 
-  OPEN(UNIT=30, FILE='pv_diag_energy_balance.csv', STATUS='replace')
+  OPEN(UNIT=30, FILE='pv_diag_energy_balance_2025.csv', STATUS='replace')
   WRITE(30,'(A)') 'timestep,SWin,' // &
                   'T_PVf,T_PVb,T_cell,T_can,T_PVa,T_ref,' // &
                   'qLW_PVf,qLW_PVb,' // &
@@ -254,7 +261,7 @@ PROGRAM pvland_offline_main
                   'qSW_PVf,qSW_PVb,' // &
                   'qPV,' // &
                   'cdh_can,cdh_PVa,' // &
-                  'U_can,U_ref,' // &
+                  'U_can,U_ref,U_PVa,' // &
                   'JLW_PVf,JLW_PVb'
 
   !=====================================================================
@@ -267,9 +274,6 @@ PROGRAM pvland_offline_main
 
     IF (MOD(temp,48) == 0) WRITE(*,'(A,I6,A,I6)') '  Timestep ', temp, ' / ', ntot-1
 
-    ! Obukhov length: one value per forcing interval (NOT interpolated, since
-    ! L passes through +-infinity at neutral). L>0 stable, L<0 unstable.
-    L_obk_in(:,:) = Lobk_input(temp)
     prcrate(:,:)  = rain_input(temp)
 
     DO it = 1, nstep_frc
@@ -292,13 +296,13 @@ PROGRAM pvland_offline_main
            radsw,rnflx,radlwin,psfc,rhosfc,wdspsfc,0.0,0.0,             &
            cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
            pt1,tair,qvair,                                              &
-           1,S_diffuse_in,lambda_in,phi_in,L_obk_in)
+           1,S_diffuse_in,lambda_in,phi_in)
     END DO
 
     !-------------------------------------------------------------------
     ! Write outputs at the end of the forcing interval
     !-------------------------------------------------------------------
-    WRITE(20, '(I0,27(",",F0.4))') temp+1, &
+    WRITE(20, '(I0,28(",",F0.4),9(",",ES14.6))') temp+1, &
         H_meas(temp+1), H_ref(1,1), &
         LE_meas(temp+1), LE_nat(1,1), &
         Rn_meas(temp+1), Rn_ref(1,1), &
@@ -321,9 +325,13 @@ PROGRAM pvland_offline_main
         G_SW_nat(1,1), &
         J_SW_nat(1,1), &
         G_LW_nat(1,1), &
-        J_LW_nat(1,1)
+        J_LW_nat(1,1), &
+        L_obk(1,1), &
+        qvref_input(temp+1), q_can_diag(1,1), q_can_diag(1,1) - qvref_input(temp+1), &
+        vpd_f3_diag(1,1), vpd_ref_diag(1,1), &
+        z0_park(1,1), zd_park(1,1), u_star_diag(1,1), cdh_nat_diag(1,1)
 
-    WRITE(30, '(I0,22(",",ES13.5))') temp+1, &
+    WRITE(30, '(I0,23(",",ES13.5))') temp+1, &
         swin_input(temp+1), &
         T_PVf(1,1) - 273.15, &
         T_PVb(1,1) - 273.15, &
@@ -344,6 +352,7 @@ PROGRAM pvland_offline_main
         cdh_PVa_diag(1,1), &
         U_can(1,1), &
         uref_diag(1,1), &
+        U_PVa(1,1), &
         JLW_PVf(1,1), &
         JLW_PVb(1,1)
 
@@ -355,8 +364,8 @@ PROGRAM pvland_offline_main
   WRITE(*,*) ''
   WRITE(*,*) '========================================='
   WRITE(*,*) 'Simulation complete!'
-  WRITE(*,*) 'Output: pv_land_output.csv'
-  WRITE(*,*) 'Output: pv_diag_energy_balance.csv'
+  WRITE(*,*) 'Output: pv_land_output_2025.csv'
+  WRITE(*,*) 'Output: pv_diag_energy_balance_2025.csv'
   WRITE(*,*) '========================================='
 
 CONTAINS
