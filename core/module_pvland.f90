@@ -297,6 +297,13 @@ module pvland_rad_cache
   REAL,    ALLOCATABLE :: sw_key(:,:,:)                   ! (4,nx,ny): swin, S_diffuse, lambda, phi
   REAL,    ALLOCATABLE :: J_SW_pv(:,:,:), G_SW_pv(:,:,:), q_SW_pv(:,:,:)   ! (8,nx,ny)
 
+  ! Wind profile of the two fixed directions theta = pi/2 and 0 used for
+  ! the momentum drag cdm_u, cdm_v (pvland_sfcphy): h_PV, d, z0, c1 of
+  ! U_profile_prep, (4,2,nx,ny); recomputed when prof_fix_valid is .FALSE.
+  ! (first call, or geometry changed in pvland_geometry)
+  LOGICAL :: prof_fix_valid = .FALSE.
+  REAL,    ALLOCATABLE :: prof_fix(:,:,:,:)
+
 end module pvland_rad_cache
 
 !########################################################################

@@ -295,6 +295,8 @@ SUBROUTINE pvland_geometry(nx,ny)
 
   ! the SW solution depends on the geometry: recompute it at the next call
   sw_valid(:,:) = .FALSE.
+  ! and the wind profile of the fixed directions (cdm_u, cdm_v)
+  prof_fix_valid = .FALSE.
 
   RETURN
 END SUBROUTINE pvland_geometry
@@ -386,6 +388,7 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
   REAL, PARAMETER :: pi = 3.14159265359
   REAL :: tema,temb,z_ref
   REAL :: Uplus
+  REAL :: zprof(3), Uprof(3)   ! heights z_ref, z_can, z_PVa and their U+
   REAL, PARAMETER :: Pr = 0.71
   
   ! (SAVE: allocated at the first call only)  [SYLVAIN]
@@ -482,17 +485,14 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
     IF (PV_PARK(i,j).eq.1.) THEN
     z_ref = zp(i,j,2) + 0.5*(zp(i,j,3)-zp(i,j,2))
     
-    CALL compute_U_plus(z_ref, udir(i,j), a(i,j), beta(i,j)*180./pi, &
-		L(i,j), h_clear(i,j), theta_0(i,j), z0_nat(i,j), pv_zd_nat, L_obk(i,j), Uplus)
-    u_star(i,j) = uref(i,j) / Uplus
-    
-    CALL compute_U_plus(z_can(i,j), udir(i,j), a(i,j), beta(i,j)*180./pi, &
-		L(i,j), h_clear(i,j), theta_0(i,j), z0_nat(i,j), pv_zd_nat, L_obk(i,j), Uplus)
-    U_can(i,j) = MAX(u_star(i,j) * Uplus, vsfcmin)   ! same wind floor as in sfcflx
-    
-    CALL compute_U_plus(z_PVa(i,j), udir(i,j), a(i,j), beta(i,j)*180./pi, &
-		L(i,j), h_clear(i,j), theta_0(i,j), z0_nat(i,j), pv_zd_nat, L_obk(i,j), Uplus)
-    U_PVa(i,j) = MAX(u_star(i,j) * Uplus, vsfcmin)
+    ! U+ at z_ref, z_can and z_PVa for the wind direction udir: same
+    ! results as three calls of compute_U_plus, shared work done once
+    zprof = (/ z_ref, z_can(i,j), z_PVa(i,j) /)
+    CALL U_plus_3(zprof, udir(i,j), a(i,j), beta(i,j)*180./pi, &
+		L(i,j), h_clear(i,j), theta_0(i,j), z0_nat(i,j), pv_zd_nat, L_obk(i,j), Uprof)
+    u_star(i,j) = uref(i,j) / Uprof(1)
+    U_can(i,j) = MAX(u_star(i,j) * Uprof(2), vsfcmin)   ! same wind floor as in sfcflx
+    U_PVa(i,j) = MAX(u_star(i,j) * Uprof(3), vsfcmin)
     ELSE
     u_star(i,j) = 0.
     U_can(i,j)  = uref(i,j)

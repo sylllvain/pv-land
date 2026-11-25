@@ -108,6 +108,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   USE rad_pvland
   USE rad_split
   USE pvland_sfcphy_work
+  USE pvland_rad_cache, ONLY : prof_fix, prof_fix_valid
   USE pvland_nml, ONLY : vf_update_opt, pv_zd_nat, pv_tau_L, pv_L_floor, &
                          pv_wsat
 
@@ -161,6 +162,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   REAL, PARAMETER :: pi = 3.14159265359
 
   REAL :: z_ref,usuf,vsuf,Uplus,tema
+  REAL :: lambda_fix            ! frontal density returned by U_profile_prep (not used)
   INTEGER :: i, j, k, is, it
   REAL :: pts_type, qvs_type   ! heat/moisture fluxes of one soil type, end of step
 
@@ -212,6 +214,8 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   ALLOCATE(ptsfc_drag(nx,ny),qvsfc_drag(nx,ny),ptsflx_n(nx,ny),qvsflx_n(nx,ny))
   ALLOCATE(u_star_pv(nx,ny), q_can_loc(nx,ny), gcan_loc(nx,ny), &
            vpd_f3_loc(nx,ny), vpd_ref_loc(nx,ny))
+  IF (.NOT. ALLOCATED(prof_fix)) ALLOCATE(prof_fix(4,2,nx,ny))
+  prof_fix_valid = .FALSE.
   ! canopy air not set by INIT_PVLAND (initopt = 1) or by a restart file:
   ! humidity of the first model level
   WHERE (q_can(:,:) < 0.0) q_can(:,:) = qv(:,:,2)
@@ -367,13 +371,37 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
       
 			z_ref = zp(i,j,2) + 0.5*(zp(i,j,3)-zp(i,j,2))
 
+			! U+ at z_ref for the fixed directions theta = pi/2 (cdm_u) and
+			! 0 (cdm_v): h_PV, d, z0, c1 of these directions are geometry
+			! only and kept in prof_fix (pvland_rad_cache); only the
+			! stability-dependent part is evaluated (same result as
+			! compute_U_plus).  [SYLVAIN]
+			IF (.NOT. prof_fix_valid) THEN
+			  CALL U_profile_prep(pi/2., a(i,j), beta(i,j)*180./pi, L(i,j), &
+			     h_clear(i,j), theta_0(i,j), roufns(i,j), pv_zd_nat,          &
+			     prof_fix(1,1,i,j), lambda_fix, prof_fix(2,1,i,j), prof_fix(3,1,i,j), prof_fix(4,1,i,j))
+			  CALL U_profile_prep(0., a(i,j), beta(i,j)*180./pi, L(i,j),    &
+			     h_clear(i,j), theta_0(i,j), roufns(i,j), pv_zd_nat,          &
+			     prof_fix(1,2,i,j), lambda_fix, prof_fix(2,2,i,j), prof_fix(3,2,i,j), prof_fix(4,2,i,j))
+			ENDIF
+
 			! ATTENTION, il faut prendre en compte la thermique
-			CALL compute_U_plus(z_ref, pi/2., a(i,j), beta(i,j)*180./pi, L(i,j), &
-			   h_clear(i,j), theta_0(i,j), roufns(i,j), pv_zd_nat, L_obk(i,j), Uplus)
+			IF (z_ref >= prof_fix(1,1,i,j)) THEN
+			  CALL U_above_prep(z_ref, prof_fix(1,1,i,j), prof_fix(2,1,i,j), &
+			     prof_fix(3,1,i,j), prof_fix(4,1,i,j), L_obk(i,j), Uplus)
+			ELSE
+			  CALL compute_U_plus(z_ref, pi/2., a(i,j), beta(i,j)*180./pi, L(i,j), &
+			     h_clear(i,j), theta_0(i,j), roufns(i,j), pv_zd_nat, L_obk(i,j), Uplus)
+			ENDIF
 			cdm_u(i,j) = (1. / Uplus)**2
 			
-			CALL compute_U_plus(z_ref, 0., a(i,j), beta(i,j)*180./pi, L(i,j), &
-			   h_clear(i,j), theta_0(i,j), roufns(i,j), pv_zd_nat, L_obk(i,j), Uplus)
+			IF (z_ref >= prof_fix(1,2,i,j)) THEN
+			  CALL U_above_prep(z_ref, prof_fix(1,2,i,j), prof_fix(2,2,i,j), &
+			     prof_fix(3,2,i,j), prof_fix(4,2,i,j), L_obk(i,j), Uplus)
+			ELSE
+			  CALL compute_U_plus(z_ref, 0., a(i,j), beta(i,j)*180./pi, L(i,j), &
+			     h_clear(i,j), theta_0(i,j), roufns(i,j), pv_zd_nat, L_obk(i,j), Uplus)
+			ENDIF
 			cdm_v(i,j) = (1. / Uplus)**2
 			
 	  ELSE
@@ -383,6 +411,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
 	  
         END DO
       END DO
+      prof_fix_valid = .TRUE.
 
 	  DO j=1,ny-1
       DO i=2,nx-1

@@ -1133,3 +1133,109 @@ subroutine Rib_to_Lobk(nx,ny,nz,ibgn,iend,jbgn,jend,zp,roufns,wspd,ptsfc,       
 	  RETURN
 		    
 end subroutine Rib_to_Lobk
+
+!============================================================
+! Optimised evaluation of the wind profile (PV-LAND version 2)  [SYLVAIN]
+!
+! compute_U_plus evaluates d, z0 and c1 of the wind direction, and the
+! profile at the canopy top U(h_PV), at every call. pvland_sfcphy and
+! DRAG_PVLAND need U+ at three heights for the same direction, and U+ at
+! z_ref for two fixed directions: the routines below compute these shared
+! quantities once. They give exactly the results of compute_U_plus (same
+! operations in the same order).
+!============================================================
+
+!============================================================
+! SUBROUTINE: U_profile_prep
+!
+! Quantities of compute_U_plus / U_above that depend only on the wind
+! direction theta and the geometry: canopy height h_PV, frontal density
+! lambda_f, displacement d, roughness z0, RSL coefficient c1.
+!============================================================
+subroutine U_profile_prep(theta, a, beta_deg, L, clearance, theta_0, z0_nat, zd_nat, &
+                          h_PV, lambda_f, d, z0, c1)
+  implicit none
+  real, intent(in)  :: theta, a, beta_deg, L, clearance, theta_0, z0_nat, zd_nat
+  real, intent(out) :: h_PV, lambda_f, d, z0, c1
+  real, parameter :: pi = 3.141592653589793  ! Pi [-] (as in compute_U_plus)
+  real :: beta
+
+  beta = beta_deg * pi / 180.0
+  h_PV = L * sin(beta) + clearance
+  call compute_lambda_f(a, L, beta, lambda_f)
+  call d_theta(theta, lambda_f, h_PV, theta_0, zd_nat, d)
+  call z0_theta(theta, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, z0)
+  call c1_theta(theta, theta_0, lambda_f, c1)
+end subroutine U_profile_prep
+
+!============================================================
+! SUBROUTINE: U_above_prep
+!
+! U_above with d, z0, c1 given (from U_profile_prep).
+!============================================================
+subroutine U_above_prep(z, h_PV, d, z0, c1, Lo, U)
+  implicit none
+  real, intent(in)  :: z, h_PV, d, z0, c1, Lo
+  real, intent(out) :: U
+  real, parameter :: kappa = 0.387
+  real, parameter :: c2 = 0.17
+  real, parameter :: Lo_neutral = 1.0e5
+  real :: arate, arg, E1, dpsihat
+  real :: psi_z, psi_0
+
+  arate = c2 / (2.0 * (h_PV - d))
+  arg   = arate * (z - d)
+  call expint_E1(arg, E1)
+  if (Lo == 0.0 .or. abs(Lo) >= Lo_neutral) then
+     psi_z = 0.0
+     psi_0 = 0.0
+  else
+     call psi_m_MOST((z - d) / Lo, psi_z)
+     call psi_m_MOST(z0 / Lo, psi_0)
+  endif
+  call psihat_stab_corr(z - d, arate, Lo, dpsihat)
+  U = (1.0 / kappa) * ( log((z - d) / z0)          &
+                        - psi_z + psi_0             &
+                        + c1 * (E1 + dpsihat) )
+end subroutine U_above_prep
+
+!============================================================
+! SUBROUTINE: U_plus_3
+!
+! U+ at three heights z(1:3) for the same wind direction theta:
+! equal to three calls of compute_U_plus(z(k), theta, ...), with d, z0,
+! c1, U(h_PV) and the parallel-wind quantities of U_within computed once.
+!============================================================
+subroutine U_plus_3(z, theta, a, beta_deg, L, clearance, theta_0, z0_nat, zd_nat, Lo, Uplus)
+  implicit none
+  real, intent(in)  :: z(3), theta, a, beta_deg, L, clearance, theta_0
+  real, intent(in)  :: z0_nat, zd_nat, Lo
+  real, intent(out) :: Uplus(3)
+  real :: h_PV, lambda_f, d, z0, c1
+  real :: U_h, w, d_par, z0_par, c3, log_part, exp_part
+  logical :: have_within
+  integer :: k
+
+  call U_profile_prep(theta, a, beta_deg, L, clearance, theta_0, z0_nat, zd_nat, &
+                      h_PV, lambda_f, d, z0, c1)
+  have_within = .false.
+  do k = 1, 3
+    if (z(k) >= h_PV) then
+      call U_above_prep(z(k), h_PV, d, z0, c1, Lo, Uplus(k))
+    else
+      if (.not. have_within) then
+        ! as U_within: U at the canopy top and parallel-wind quantities
+        call U_above_prep(h_PV, h_PV, d, z0, c1, Lo, U_h)
+        call alpha_w(lambda_f, w)
+        w = w * cos(theta - theta_0)**2
+        call d_theta(theta_0 + 3.141592653589793 / 2.0, lambda_f, h_PV, theta_0, zd_nat, d_par)
+        call z0_theta(theta_0 + 3.141592653589793 / 2.0, lambda_f, h_PV, beta_deg, theta_0, z0_nat, zd_nat, z0_par)
+        call c3_theta(theta, lambda_f, theta_0, c3)
+        have_within = .true.
+      endif
+      log_part = log((z(k) - d_par) / z0_par) / log((h_PV - d_par) / z0_par)
+      exp_part = exp(-c3 * (1.0 - z(k) / h_PV))
+      Uplus(k) = (1.0 - w) * U_h * log_part + w * U_h * exp_part
+    endif
+  end do
+end subroutine U_plus_3
