@@ -71,6 +71,7 @@ PROGRAM pvland_offline_main
   REAL :: frac
   CHARACTER(LEN=500) :: line
   CHARACTER(LEN=256) :: forcing_file    ! forcing CSV (1st command-line argument)
+  INTEGER :: nstep_frc                  ! number of PV-LAND steps (dtsfc) per forcing interval
   CHARACTER(LEN=256) :: nml_file        ! PV-LAND namelist file (2nd command-line argument)
 
   ! ====== CSV input arrays ======
@@ -85,6 +86,7 @@ PROGRAM pvland_offline_main
 
   ! ====== ARPS-like atmospheric state (single column) ======
   REAL :: u(nx,ny,nz), v(nx,ny,nz), w(nx,ny,nz)
+  REAL :: wdspsfc(nx,ny)                 ! surface wind speed (used by pvland_sfcphy outside the park only)
   REAL :: ptprt(nx,ny,nz), pprt(nx,ny,nz), qv(nx,ny,nz)
   REAL :: ptbar(nx,ny,nz), pbar(nx,ny,nz), qvbar(nx,ny,nz)
   REAL :: zp(nx,ny,nz)
@@ -121,7 +123,8 @@ PROGRAM pvland_offline_main
 
   ! ARPS control parameters used by the PV-LAND code
   dtsfc       = 2.
-  nsfcst      = NINT(dt_forcing/dtsfc)
+  nstep_frc   = NINT(dt_forcing/dtsfc)   ! PV-LAND steps per forcing interval
+  nsfcst      = 1                         ! soil sub-steps per pvland_sfcphy call (ARPS: dtbig/dtsfc)
   moist       = 1
   initopt     = 1
   soilinitopt = 0
@@ -268,16 +271,17 @@ PROGRAM pvland_offline_main
     L_obk_in(:,:) = Lobk_input(temp)
     prcrate(:,:)  = rain_input(temp)
 
-    DO it = 1, nsfcst
-      frac = REAL(it) / REAL(nsfcst)
+    DO it = 1, nstep_frc
+      frac = REAL(it) / REAL(nstep_frc)
       CALL set_atmosphere(temp, temp+1, frac)
       nstep = nstep + 1
 
+      wdspsfc(:,:) = SQRT(u(:,:,2)**2 + v(:,:,2)**2 + w(:,:,2)**2)
       CALL pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                       &
            u,v,w,ptprt,pprt,qv,ptbar,pbar,qvbar,zp,prcrate,            &
            soiltyp,stypfrct,vegtyp,lai,roufns,veg,                      &
            tsoil,qsoil,wetcanp,snowdpth,qvsfc,                          &
-           radsw,rnflx,radlwin,psfc,rhosfc,0.0,                         &
+           radsw,rnflx,radlwin,psfc,rhosfc,wdspsfc,0.0,0.0,             &
            cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
            pt1,tair,qvair,                                              &
            1,S_diffuse_in,lambda_in,phi_in,L_obk_in)

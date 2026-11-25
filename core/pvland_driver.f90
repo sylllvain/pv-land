@@ -47,6 +47,9 @@ MODULE pvland_sfcphy_work
                              dum_G_SW_nat, dum_J_SW_nat, &
                              dum_G_LW_nat, dum_J_LW_nat
   REAL, ALLOCATABLE, DIMENSION (:,:) :: lambda_deg,phi_deg
+  ! outside the park: surface state used by dragcoef and fluxes at t^n
+  ! (as sfcphy = 4)
+  REAL, ALLOCATABLE, DIMENSION (:,:) :: ptsfc_drag,qvsfc_drag,ptsflx_n,qvsflx_n
 
 END MODULE pvland_sfcphy_work
 
@@ -62,7 +65,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
            u,v,w,ptprt,pprt,qv,ptbar,pbar,qvbar,zp,prcrate,            &
            soiltyp,stypfrct,vegtyp,lai,roufns,veg,                      &
            tsoil,qsoil,wetcanp,snowdpth,qvsfc,                          &
-           radsw,rnflx,radlwin,psfc,rhosfc,gumove,                      &
+           radsw,rnflx,radlwin,psfc,rhosfc,wdspsfc,gumove,gvmove,       &
            cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
            pt1,tair,qvair,                                              &
            meas_opt,S_diffuse_in,lambda_in,phi_in,L_obk_in)
@@ -85,6 +88,13 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
 !                 L_obk_in are not used.
 !  meas_opt = 1 (offline): they are taken from S_diffuse_in (W/m2),
 !                 lambda_in, phi_in (rad, park frame) and L_obk_in (m).
+!
+!  Outside the PV park (pv_park = 0) the ground surface is computed as
+!  with sfcphy = 4 (dragcoef + sfcflx + soilebm): reference wind wdspsfc,
+!  surface air tair, qvair averaged over levels 1-2, drag coefficients from
+!  tsoil and qvsfc, atmospheric fluxes at the beginning of the step (t^n),
+!  nsfcst soil sub-steps, fluxes weighted by stypfrct over the soil types,
+!  qvsfc updated.
 !
 !  AUTHOR: moved from sfcphy3d.f90 (sfcphy == 5 block)  [SYLVAIN]
 !
@@ -122,7 +132,8 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   REAL :: radlwin(nx,ny)    ! Incoming longwave radiation
   REAL :: psfc   (nx,ny)    ! Surface pressure (Pascal)
   REAL :: rhosfc (nx,ny)    ! Air density at the surface
-  REAL :: gumove            ! Domain translation speed
+  REAL :: wdspsfc(nx,ny)    ! Surface wind speed of sfcphysics (used outside the park)
+  REAL :: gumove, gvmove    ! Domain translation speed (x, y)
 
   REAL :: cdm(nx,ny), cdh(nx,ny), cdq(nx,ny)   ! Drag coefficients (output)
   REAL :: usflx(nx,ny), vsflx(nx,ny)           ! Momentum fluxes (in: previous step, out)
@@ -145,7 +156,8 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   REAL, PARAMETER :: pi = 3.14159265359
 
   REAL :: z_ref,usuf,vsuf,Uplus,tema
-  INTEGER :: i, j, k, is
+  INTEGER :: i, j, k, is, it
+  REAL :: pts_type, qvs_type   ! heat/moisture fluxes of one soil type, end of step
 
   INCLUDE 'globcst.inc'
   INCLUDE 'phycst.inc'
@@ -190,6 +202,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
                              dum_G_SW_nat(nx,ny), dum_J_SW_nat(nx,ny), &
                              dum_G_LW_nat(nx,ny), dum_J_LW_nat(nx,ny))
   ALLOCATE(lambda_deg(nx,ny),phi_deg(nx,ny))
+  ALLOCATE(ptsfc_drag(nx,ny),qvsfc_drag(nx,ny),ptsflx_n(nx,ny),qvsflx_n(nx,ny))
   END IF
 
 
@@ -206,6 +219,18 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
                         * (psfc(i,j)/p0)**rddcp   ! Temperature
         qvair(i,j) = qv(i,j,2)
         
+      END DO
+    END DO
+
+    ! outside the park, surface air as sfcphy = 4 (mean of levels 1-2)
+    DO j=1,ny-1
+      DO i=1,nx-1
+        IF (pv_park(i,j).ne.1.) THEN
+        tair(i,j) = 0.5 * ( (ptbar(i,j,1)+ptprt(i,j,1))                 &
+                          + (ptbar(i,j,2)+ptprt(i,j,2)) )               &
+                        * (psfc(i,j)/p0)**rddcp   ! Temperature
+        qvair(i,j) = 0.5 * ( qv(i,j,1) + qv(i,j,2) )
+        ENDIF
       END DO
     END DO
 
@@ -291,6 +316,12 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
     !rhosfc=1.179566
     !L_obk=-29.1319
     
+    ! fluxes accumulated over the soil types (weights stypfrct)
+    usflx (:,:) = 0.0
+    vsflx (:,:) = 0.0
+    ptsflx(:,:) = 0.0
+    qvsflx(:,:) = 0.0
+
     DO is=nstyp,1,-1
 
       DO i=1,nx-1
@@ -314,19 +345,28 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
 		cdh_can,cdq_can,cdm_can,&
 		z0_PV)
 
-    !si pas PV, z0_PV=rough et uref=wdpsfc
+    ! outside the park, as sfcphy = 4: wind wdspsfc, z0 = roufns (z0_PV),
+    ! surface state of the soil type is
+      DO j=1,ny-1
+        DO i=1,nx-1
+        IF (pv_park(i,j).eq.1.) THEN
+          ptsfc_drag(i,j) = ptsfc_eff(i,j)
+          qvsfc_drag(i,j) = qvsfc_eff(i,j)
+        ELSE
+          uref(i,j) = wdspsfc(i,j)
+          ptsfc_drag(i,j) = tsoil(i,j,1,is)*(p0/psfc(i,j))**rddcp
+          qvsfc_drag(i,j) = qvsfc(i,j,is)
+        ENDIF
+        END DO
+      END DO
+
         CALL dragcoef(nx,ny,nz,zp,                                      &
-             ptsfc_eff,qvsfc_eff,soiltyp(1,1,is),z0_PV,uref,pt1,    &
+             ptsfc_drag,qvsfc_drag,soiltyp(1,1,is),z0_PV,uref,pt1,  &
              cdm,cdh,cdq)
     
     !-------------------------------------------------------------------
     ! 3. COMPUTE USFLX, VSFLX, PTSFLX, QVSFLX
     !-------------------------------------------------------------------
-
-    usflx (:,:) = 0.0
-    vsflx (:,:) = 0.0
-    ptsflx(:,:) = 0.0
-    qvsflx(:,:) = 0.0
 
       DO j=1,ny-1
         DO i=1,nx-1
@@ -363,7 +403,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
       END DO
 	  DO j=2,ny-1
       DO i=1,nx-1
-			vsuf = 0.5*(v(i,j,2)+v(i,j,1))+gumove
+			vsuf = 0.5*(v(i,j,2)+v(i,j,1))+gvmove
 			
 			vsflx(i,j)  = vsflx(i,j)  + 0.125*(rhosfc(i,j)+rhosfc(i,j-1))* &
 				 (cdm_v(i,j)+cdm_v(i,j-1))*(uref(i,j)+uref(i,j-1))*                         &
@@ -374,12 +414,20 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
       DO j=1,ny-1
         DO i=1,nx-1
 
+        ! heat and moisture fluxes at t^n (sfcflx), used outside the park
         tema = rhosfc(i,j)*MAX(uref(i,j),vsfcmin)
-        ptsflx(i,j)=cdh(i,j)*tema*(pt1(i,j)-ptsfc_eff(i,j))
-        qvsflx(i,j)=cdq(i,j)*tema*(qv(i,j,2)-qvsfc_eff(i,j))
+        ptsflx_n(i,j)=cdh(i,j)*tema*(pt1(i,j)-ptsfc_drag(i,j))
+        qvsflx_n(i,j)=cdq(i,j)*tema*(qv(i,j,2)-qvsfc_drag(i,j))
  	  
         END DO
       END DO
+
+    !-------------------------------------------------------------------
+    ! nsfcst sub-steps of dtsfc per call (dtbig = nsfcst*dtsfc), with the
+    ! exchange coefficients of the call, as soilebm
+    !-------------------------------------------------------------------
+
+    DO it = 1, nsfcst
 
     !-------------------------------------------------------------------
     ! 4. SOLVE AIR NODE TEMPERATURES with current T_nat, T_PVb, T_PVf
@@ -447,10 +495,10 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
         ! Moisture half-step (clamped to [0, wsat] like ARPS soilebm)
         qsoil_surf_half(i,j) = qsoil_surf(i,j) + 0.5*dtsfc * frc_wsfc(i,j)
         qsoil_surf_half(i,j) = MAX(qsoil_surf_half(i,j), 0.0)
-        qsoil_surf_half(i,j) = MIN(qsoil_surf_half(i,j), wsat(soiltyp(i,j,1)))
+        qsoil_surf_half(i,j) = MIN(qsoil_surf_half(i,j), wsat(soiltyp(i,j,is)))
         qsoil_deep_half(i,j) = qsoil_deep(i,j) + 0.5*dtsfc * frc_wdp(i,j)
         qsoil_deep_half(i,j) = MAX(qsoil_deep_half(i,j), 0.0)
-        qsoil_deep_half(i,j) = MIN(qsoil_deep_half(i,j), wsat(soiltyp(i,j,1)))
+        qsoil_deep_half(i,j) = MIN(qsoil_deep_half(i,j), wsat(soiltyp(i,j,is)))
       END DO
     END DO
     wetcanp_half = wetcanp
@@ -545,15 +593,17 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
         ! Moisture corrector (clamped to [0, wsat] like ARPS soilebm)
         qsoil_surf(i,j) = qsoil_surf(i,j) + dtsfc * rhs_wsfc(i,j)
         qsoil_surf(i,j) = MAX(qsoil_surf(i,j), 0.0)
-        qsoil_surf(i,j) = MIN(qsoil_surf(i,j), wsat(soiltyp(i,j,1)))
+        qsoil_surf(i,j) = MIN(qsoil_surf(i,j), wsat(soiltyp(i,j,is)))
         qsoil_deep(i,j) = qsoil_deep(i,j) + dtsfc * rhs_wdp(i,j)
         qsoil_deep(i,j) = MAX(qsoil_deep(i,j), 0.0)
-        qsoil_deep(i,j) = MIN(qsoil_deep(i,j), wsat(soiltyp(i,j,1)))
+        qsoil_deep(i,j) = MIN(qsoil_deep(i,j), wsat(soiltyp(i,j,is)))
         wetcanp(i,j,is) = wetcanp(i,j,is) + dtsfc * rhs_wcnp(i,j)
         wetcanp(i,j,is) = MAX(wetcanp(i,j,is), 0.0)
         wetcanp(i,j,is) = MIN(wetcanp(i,j,is), wrmax(i,j))
       END DO
     END DO
+
+    END DO  ! it = 1, nsfcst
 
   ! Solve air node temps with final T_nat, T_PVb, T_PVf
   CALL solve_air_node_temperatures(nx, ny, pv_park, &
@@ -641,21 +691,30 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
     END DO
   END DO
   
-      DO i=1,nx-1
-        DO j=1,ny-1
-          !ptsflx(i,j) = ptsflx(i,j) - (H_ref(i,j)/cp)*stypfrct(i,j,is)*(p0/psfc(i,j))**rddcp
-          !qvsflx(i,j) = qvsflx(i,j) - (LE_nat(i,j)/lathv)*stypfrct(i,j,is)
-          ptsflx(i,j) = - (H_ref(i,j)/cp)*stypfrct(i,j,is)*(p0/psfc(i,j))**rddcp
-          qvsflx(i,j) = - (LE_nat(i,j)/lathv)*stypfrct(i,j,is)
-        END DO
-      END DO
-
+      ! Fluxes to the atmosphere, accumulated over the soil types:
+      !   PV park : from the end-of-step state (H_ref, LE_nat)
+      !   outside : at t^n (ptsflx_n, qvsflx_n), as sfcflx with sfcphy = 4
+      ! ptsfc_eff, qvsfc_eff: effective surface values giving the
+      ! end-of-step fluxes; qvsfc: effective surface humidity (as soilebm)
       DO j=1,ny-1
         DO i=1,nx-1
 
+        pts_type = - (H_ref(i,j)/cp)*(p0/psfc(i,j))**rddcp
+        qvs_type = - (LE_nat(i,j)/lathv)
         tema = rhosfc(i,j)*MAX(uref(i,j),vsfcmin)
-        ptsfc_eff(i,j) = pt1(i,j)-ptsflx(i,j)/(cdh(i,j)*tema)
-        qvsfc_eff(i,j) = qv(i,j,2)-qvsflx(i,j)/(cdq(i,j)*tema)
+        ptsfc_eff(i,j) = pt1(i,j)-pts_type/(cdh(i,j)*tema)
+        qvsfc_eff(i,j) = qv(i,j,2)-qvs_type/(cdq(i,j)*tema)
+
+        IF (pv_park(i,j).eq.1.) THEN
+          ptsflx(i,j) = ptsflx(i,j) + pts_type*stypfrct(i,j,is)
+          qvsflx(i,j) = qvsflx(i,j) + qvs_type*stypfrct(i,j,is)
+          qvsfc(i,j,is) = qvsfc_eff(i,j)
+        ELSE
+          ptsflx(i,j) = ptsflx(i,j) + ptsflx_n(i,j)*stypfrct(i,j,is)
+          qvsflx(i,j) = qvsflx(i,j) + qvsflx_n(i,j)*stypfrct(i,j,is)
+          qvsfc(i,j,is) = qvair(i,j)                                    &
+                        + LE_nat(i,j)/(lathv*rhosfc(i,j)*cdq(i,j)*uref(i,j))
+        ENDIF
  	  
         END DO
       END DO

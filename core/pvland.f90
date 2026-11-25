@@ -526,6 +526,7 @@ SUBROUTINE DRAG_PVLAND(nx,ny,nz,zp,u,v,w,pbar,pt1,ptsfc,L_obk,&
     z0_park_arr(i,j) = z0_park(i,j)
     ELSE
     z0_park_arr(i,j) = z0_nat(i,j)
+    udir(i,j) = 0.            ! not used outside the park (defined value)
     ENDIF
 
     !-------------------------------------------------------------------
