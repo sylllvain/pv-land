@@ -9,7 +9,7 @@
 # Targets:
 #   make              build pv_land.exe
 #   make run          run with the full forcing
-#   make run-short    run with the 5-day forcing (~8 s)
+#   make run-short    run with the 5-day forcing (~1 s)
 #   make check-arps   check that core/ and arps_lib/ are identical to ARPS
 #                     ($(ARPS_DIR))
 #   make sync-arps    copy them again from ARPS
@@ -104,7 +104,7 @@ run: $(EXEC)
 	./$(EXEC)
 
 run-short: $(EXEC)
-	./$(EXEC) recorded_data_2025_short_5days.csv
+	./$(EXEC) pvland.nml recorded_data_2025_short_5days.csv
 
 # Consistency with ARPS
 check-arps:

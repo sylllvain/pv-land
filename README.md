@@ -58,8 +58,9 @@ longueur d'Obukhov est calculée par PV-LAND dans les deux cas.
 make              # compile pv_land.exe (ifx -O2)
 make run          # forçage complet (recorded_data_2025.csv, 2351 pas de 30 min, ~10 s)
 make run-short    # 5 premiers jours (recorded_data_2025_short_5days.csv, ~1 s)
-./pv_land.exe mon_forcage.csv                 # paramètres lus dans pvland.nml
-./pv_land.exe mon_forcage.csv mes_params.nml  # autre fichier de paramètres
+./pv_land.exe                                 # paramètres et forçage lus dans pvland.nml
+./pv_land.exe mes_params.nml                  # autre fichier de paramètres (forçage : forcing_file)
+./pv_land.exe pvland.nml mon_forcage.csv      # forçage remplaçant forcing_file de &offline_site
 ```
 
 Sorties (mêmes noms et colonnes que PV_LAND_final, lues par `analysis/`) :

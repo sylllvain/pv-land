@@ -21,12 +21,12 @@
 !  in the park frame are taken from the measurements; the Obukhov length
 !  is computed by PV-LAND.
 !
-!  Usage:  ./pv_land.exe [forcing.csv [pvland.nml]]
-!          parameter file (default pvland.nml) with two namelists:
+!  Usage:  ./pv_land.exe [params.nml [forcing.csv]]
+!          params.nml: parameter file (default pvland.nml) with two namelists:
 !            &pvland       PV park parameters, the same as in ARPS arps.input
 !            &offline_site site and run parameters of the offline model
 !                          (ARPS: &soil_ebm of arps.input and surface files)
-!          forcing file: 1st argument, else forcing_file of &offline_site
+!          forcing.csv: optional, replaces forcing_file of &offline_site
 !
 !  Grid: nx = ny = 2 (ARPS loops run from 1 to nx-1, so a single
 !  column (1,1) is computed), nz = 3 (level 2 = reference level).
@@ -66,7 +66,7 @@ PROGRAM pvland_offline_main
   ! dtsfc, styp, vtyp, lai0, roufns0, veg0 are the ARPS variables of
   ! globcst.inc (in ARPS: &soil_ebm of arps.input). The PV park parameters
   ! are in &pvland (module pvland_nml), as in ARPS. Defaults below.
-  CHARACTER(LEN=256) :: forcing_file = 'recorded_data_2025.csv'  ! Forcing CSV file (1st command-line argument overrides it)
+  CHARACTER(LEN=256) :: forcing_file = 'recorded_data_2025.csv'  ! Forcing CSV file (the 2nd command-line argument replaces it)
   REAL :: dt_forcing     = 1800.    ! Time interval between two rows of the forcing file (s)
   REAL :: tsoil_sfc_ini  = -999.    ! Initial surface soil temperature (C); < -100: air temperature of the first forcing row
   REAL :: tsoil_deep_ini = 20.7     ! Initial deep soil temperature (C)
@@ -83,7 +83,7 @@ PROGRAM pvland_offline_main
   REAL :: frac
   CHARACTER(LEN=500) :: line
   INTEGER :: nstep_frc                  ! number of PV-LAND steps (dtsfc) per forcing interval
-  CHARACTER(LEN=256) :: nml_file        ! PV-LAND namelist file (2nd command-line argument)
+  CHARACTER(LEN=256) :: nml_file        ! parameter file (1st command-line argument, default pvland.nml)
 
   ! ====== CSV input arrays ======
   REAL, ALLOCATABLE :: uref_input(:), udir_input(:)
@@ -143,7 +143,7 @@ PROGRAM pvland_offline_main
   ! Parameters: namelists &pvland and &offline_site (pvland.nml)
   !---------------------------------------------------------------------
   nml_file = 'pvland.nml'
-  IF (COMMAND_ARGUMENT_COUNT() >= 2) CALL GET_COMMAND_ARGUMENT(2, nml_file)
+  IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, nml_file)
   OPEN(UNIT=11, FILE=TRIM(nml_file), STATUS='old', IOSTAT=ios)
   IF (ios /= 0) THEN
     WRITE(*,*) 'ERROR: parameter file not found: ', TRIM(nml_file)
@@ -161,7 +161,7 @@ PROGRAM pvland_offline_main
     STOP 1
   END IF
   CLOSE(11)
-  IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, forcing_file)
+  IF (COMMAND_ARGUMENT_COUNT() >= 2) CALL GET_COMMAND_ARGUMENT(2, forcing_file)
   WRITE(*,*) 'Parameters read from ', TRIM(nml_file), ':'
   WRITE(*,NML=pvland)
   WRITE(*,NML=offline_site)

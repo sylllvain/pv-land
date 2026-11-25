@@ -10,7 +10,7 @@
 ! Site and run parameters of the offline model: namelist &offline_site at
 ! the end of this file (in ARPS they come from &soil_ebm of arps.input).
 !
-! Usage: ./pv_land.exe [forcing.csv [pvland.nml]]
+! Usage: ./pv_land.exe [params.nml [forcing.csv]]   (forcing.csv replaces forcing_file)
 
  &pvland
 
@@ -91,7 +91,7 @@
 !-----------------------------------------------------------------------
 
  &offline_site
-   forcing_file   = 'recorded_data_2025.csv', ! Forcing CSV file (the 1st command-line argument overrides it)
+   forcing_file   = 'recorded_data_2025.csv', ! Forcing CSV file (the 2nd command-line argument replaces it)
    dt_forcing     = 1800.,   ! Time interval between two rows of the forcing file (s)
    dtsfc          = 2.,      ! PV-LAND time step (s)
    styp           = 1,       ! Soil type of the site (soilcst.inc; its parameters may be overridden in &pvland)
