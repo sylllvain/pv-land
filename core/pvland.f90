@@ -58,6 +58,7 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
 !
   INTEGER :: i, j
   REAL :: beta_deg,theta_0_deg,psfc
+  REAL :: t_air                ! temperature of the first model level (K)
   REAL, PARAMETER :: pi = 3.14159265359
 !
 !-----------------------------------------------------------------------
@@ -182,42 +183,32 @@ SUBROUTINE INIT_PVLAND(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc,tsoil,&
 
   CALL pvland_geometry(nx,ny)
                         
-    ! air nodes: read from the restart file when initopt /= 1
+    ! Initial PV-LAND state (initopt = 1). With a restart (initopt /= 1)
+    ! these variables, allocated in arps.f90, are read from the restart
+    ! file (rst3d.f90).
+    !   - air nodes (T_can, T_PVa) and PV nodes (T_PVf, T_cell, T_PVb):
+    !     temperature of the first model level
+    !   - effective surface values ptsfc_eff, qvsfc_eff of the soil
+    !   - neutral Obukhov length; canopy-air humidity set at the first
+    !     call of pvland_sfcphy (q_can < 0)
     IF (initopt.eq.1) THEN
-    DO j=1,ny-1
-      DO i=1,nx-1
-      psfc = 0.5 * ( pprt(i,j,1) + pbar(i,j,1)                   &
-                          + pprt(i,j,2) + pbar(i,j,2) )
-  T_can(i,j) = (ptbar(i,j,2)+ptprt(i,j,2))               &
-                        * (psfc/p0)**rddcp
-  T_PVa(i,j) = (ptbar(i,j,2)+ptprt(i,j,2))               &
-                        * (psfc/p0)**rddcp
-	  enddo !i
-	  enddo !j
-    ENDIF
-
-    IF (initopt.eq.1) THEN
-    ! version 2 state (allocated in arps.f90 like T_PVf, read from the
-    ! restart file when initopt /= 1): neutral Obukhov length, canopy-air
-    ! humidity set at the first call of pvland_sfcphy (q_can < 0)
     L_obk(:,:) = 0.0
     q_can(:,:) = -1.0
     DO j=1,ny-1
       DO i=1,nx-1
-      psfc = 0.5 * ( pprt(i,j,1) + pbar(i,j,1)                   &
-                          + pprt(i,j,2) + pbar(i,j,2) )
-  T_PVf(i,j) = (ptbar(i,j,2)+ptprt(i,j,2))               &
-                        * (psfc/p0)**rddcp
-  T_cell(i,j) = (ptbar(i,j,2)+ptprt(i,j,2))               &
-                        * (psfc/p0)**rddcp
-  T_PVb(i,j) = (ptbar(i,j,2)+ptprt(i,j,2))               &
-                        * (psfc/p0)**rddcp
-  ptsfc_eff(i,j) = tsoil(i,j)*(p0/psfc)**rddcp
-  
-  qvsfc_eff(i,j) = qvsfc(i,j)
-	  enddo !i
-	  enddo !j
-	  ENDIF
+        psfc = 0.5 * ( pprt(i,j,1) + pbar(i,j,1)                         &
+                     + pprt(i,j,2) + pbar(i,j,2) )
+        t_air = (ptbar(i,j,2)+ptprt(i,j,2)) * (psfc/p0)**rddcp
+        T_can(i,j)  = t_air
+        T_PVa(i,j)  = t_air
+        T_PVf(i,j)  = t_air
+        T_cell(i,j) = t_air
+        T_PVb(i,j)  = t_air
+        ptsfc_eff(i,j) = tsoil(i,j)*(p0/psfc)**rddcp
+        qvsfc_eff(i,j) = qvsfc(i,j)
+      END DO
+    END DO
+    ENDIF
     
   RETURN
 END SUBROUTINE init_pvland
@@ -828,7 +819,7 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
                                diag_JLW_PVf_out, diag_JLW_PVb_out, &
                                G_SW_nat_out, J_SW_nat_out, &
                                G_LW_nat_out, J_LW_nat_out, &
-                               q_can_out, gcan_out, vpd_f3_out, vpd_ref_out)
+                               q_can_out, gcan_out, vpd_f3_out, vpd_ref_out, full)
 !
 !-----------------------------------------------------------------------
 !
@@ -948,6 +939,13 @@ SUBROUTINE compute_all_forcings(nx, ny, nz, nzsoil, pv_park, rnflx_arps, &
   REAL, INTENT(OUT) :: gcan_out(nx,ny)     ! Conductance canopy air -> reference [kg m-2 s-1]
   REAL, INTENT(OUT) :: vpd_f3_out(nx,ny)   ! VPD used in F3 [kPa]
   REAL, INTENT(OUT) :: vpd_ref_out(nx,ny)  ! qvsat(T_air) - q_ref [kPa]
+  ! .TRUE.: all forcings and diagnostics. .FALSE.: only the soil part
+  ! (H_nat, LE_nat, G_nat, q_can, soil-moisture forcings), used for the
+  ! end-of-step fluxes when no output is written: the LW radiosities, the
+  ! fluxes and the energy balance of the PV faces, the radiation
+  ! diagnostics and frc_nat (it needs rnflx) are not computed; the SW part
+  ! comes from the cache (unchanged state of the sun).  [SYLVAIN]
+  LOGICAL, INTENT(IN) :: full
   
   ! Local - Radiation (8-surface radiosity system)
   REAL :: F_matrix(8,8), F_sky(8)
@@ -1094,6 +1092,7 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   ! LW radiosity (temperature-dependent; matrix factorised once in INIT_PVLAND)
   !CALL solve_LW_radiosities(8, epsilon_surf, T_surf, F_matrix, F_sky, &
   !                         Lwin(i,j), J_LW, info_rad)
+  IF (full) THEN
   CALL solve_LW_radiosities_lu(8, epsilon_surf, T_surf, LU_LW_pv(:,:,i,j), ipiv_LW_pv(:,i,j), &
                            F_sky, Lwin(i,j), J_LW, info_rad)
   CALL compute_LW_irradiances(8, F_matrix, F_sky, J_LW, Lwin(i,j), G_LW)
@@ -1138,7 +1137,8 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
                     (a(i,j) + w(i,j)) * F_sky(1) * J_LW(1)) / (a(i,j) + w(i,j))
   
   ! Setup radiation inputs for soilebm_frc
-  radsw(i,j) = G_SW_nat(i,j)  ! Total SW irradiance on natural surface (from radiosity)
+  ENDIF  ! full
+  radsw(i,j) = G_SW(1)  ! Total SW irradiance on natural surface (from radiosity)
   rnflx(i,j) = q_dot_SW_nat(i,j) + q_dot_LW_nat(i,j)  ! Net radiation for natural surface
 
   ELSE
@@ -1159,6 +1159,7 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   ! 2. CONVECTION - Using sfcflx with proper 3D arrays
   !=====================================================================
   
+  IF (full) THEN   ! fluxes of the PV faces
   ptprt_loc = 0.0
   
   ! (1) Natural surface -> Canopy air
@@ -1202,6 +1203,7 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
              U_PVa, rhosfc, ptsfc_loc, qvref, &
              cdm_PVf, cdh_PVf, cdq_PVf, &
              usflx_dummy, vsflx_dummy, ptsflx_PVf, qvsflx_PVf)
+  ENDIF  ! full
   
   !=====================================================================
   ! 3. SOIL FORCINGS (via soilebm_frc)
@@ -1320,6 +1322,7 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
   ! 4. PV NODE FORCINGS
   !=====================================================================
   
+  IF (full) THEN   ! energy balance of the PV nodes
   DO j = 1, ny-1
     DO i = 1, nx-1
       
@@ -1391,6 +1394,8 @@ ALLOCATE (q_dot_SW_PVf(nx,ny), q_dot_LW_PVf(nx,ny),q_dot_SW_cell(nx,ny),&
       
     END DO
   END DO
+
+  ENDIF  ! full
 
 !DEALLOCATE (q_dot_SW_PVf, q_dot_LW_PVf,q_dot_SW_cell,&    ! kept (SAVE)  [SYLVAIN]
 ! q_dot_SW_PVb, q_dot_LW_PVb,q_dot_SW_nat, &

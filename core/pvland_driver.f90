@@ -70,7 +70,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
            radsw,rnflx,radlwin,psfc,rhosfc,wdspsfc,gumove,gvmove,       &
            cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
            pt1,tair,qvair,                                              &
-           meas_opt,S_diffuse_in,lambda_in,phi_in)
+           meas_opt,S_diffuse_in,lambda_in,phi_in,diag_out)
 !
 !-----------------------------------------------------------------------
 !
@@ -151,6 +151,8 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   REAL :: S_diffuse_in(nx,ny)   ! measured diffuse SW (W/m2)        (meas_opt = 1)
   REAL :: lambda_in(nx,ny)      ! measured lambda, park frame (rad) (meas_opt = 1)
   REAL :: phi_in(nx,ny)         ! measured phi, park frame (rad)    (meas_opt = 1)
+  LOGICAL :: diag_out           ! .TRUE.: compute all the diagnostics of the step (output step);
+                                ! .FALSE.: end-of-step fluxes only (faster)
 !
 !-----------------------------------------------------------------------
 !  Misc. local variables
@@ -471,7 +473,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
                              dum_JLW_PVf, dum_JLW_PVb, &
                              dum_G_SW_nat, dum_J_SW_nat, &
                              dum_G_LW_nat, dum_J_LW_nat, &
-                             q_can_loc, gcan_loc, vpd_f3_loc, vpd_ref_loc)
+                             q_can_loc, gcan_loc, vpd_f3_loc, vpd_ref_loc, .TRUE.)
     
     ! Predictor step: T^(n+1/2) = T^n + (dt/2) * frc^n
     ! Same predictor-corrector as soilebm (soilebm3d.f90)  [SYLVAIN]
@@ -556,7 +558,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
                              dum_JLW_PVf, dum_JLW_PVb, &
                              dum_G_SW_nat, dum_J_SW_nat, &
                              dum_G_LW_nat, dum_J_LW_nat, &
-                             q_can_loc, gcan_loc, vpd_f3_loc, vpd_ref_loc)
+                             q_can_loc, gcan_loc, vpd_f3_loc, vpd_ref_loc, .TRUE.)
     
     ! Canopy-air humidity of this small timestep (F3 of the next call) and
     ! Obukhov length from the fluxes just computed (lagged by one dtsfc,
@@ -667,8 +669,12 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
                              dum_JLW_PVf, dum_JLW_PVb, &
                              dum_G_SW_nat, dum_J_SW_nat, &
                              dum_G_LW_nat, dum_J_LW_nat, &
-                             q_can_loc, gcan_loc, vpd_f3_loc, vpd_ref_loc)
-  ! frc_* are discarded; H_nat, LE_nat, G_nat, Rn_ref_out, SW/LW_out_sky matter
+                             q_can_loc, gcan_loc, vpd_f3_loc, vpd_ref_loc, diag_out)
+  ! frc_* are discarded; H_nat, LE_nat, G_nat, Rn_ref_out, SW/LW_out_sky matter.
+  ! With diag_out = .FALSE. only the soil part is computed (LE_nat, H_nat,
+  ! G_nat for the fluxes); the radiation and PV diagnostics keep the
+  ! values of the last output step.  [SYLVAIN]
+  IF (diag_out) THEN
   
   qLW_PVf = dum_qLW_PVf
   qLW_PVb = dum_qLW_PVb
@@ -687,6 +693,7 @@ SUBROUTINE pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                         &
   J_SW_nat = dum_J_SW_nat
   G_LW_nat = dum_G_LW_nat
   J_LW_nat = dum_J_LW_nat
+  ENDIF  ! diag_out
   
   
   !=====================================================================

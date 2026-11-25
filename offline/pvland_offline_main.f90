@@ -17,13 +17,16 @@
 !  of pvland_driver.f90) and the ARPS routines (arps_lib/) are copies of
 !  the ARPS sources (see scripts/sync_from_arps.py). Only this file and
 !  offline/pvland_park_map.f90 are specific to the offline model.
-!  pvland_sfcphy is called with meas_opt = 1: diffuse SW, sun angles in
-!  the park frame and Obukhov length are taken from the measurements.
+!  pvland_sfcphy is called with meas_opt = 1: diffuse SW and sun angles
+!  in the park frame are taken from the measurements; the Obukhov length
+!  is computed by PV-LAND.
 !
 !  Usage:  ./pv_land.exe [forcing.csv [pvland.nml]]
-!          default forcing file: recorded_data_adjusted_daily_summer_2025.csv
-!          default PV-LAND parameter file: pvland.nml (namelist &pvland,
-!          the same as in ARPS arps.input; pv_park_opt = 2: no PV panels)
+!          parameter file (default pvland.nml) with two namelists:
+!            &pvland       PV park parameters, the same as in ARPS arps.input
+!            &offline_site site and run parameters of the offline model
+!                          (ARPS: &soil_ebm of arps.input and surface files)
+!          forcing file: 1st argument, else forcing_file of &offline_site
 !
 !  Grid: nx = ny = 2 (ARPS loops run from 1 to nx-1, so a single
 !  column (1,1) is computed), nz = 3 (level 2 = reference level).
@@ -58,25 +61,27 @@ PROGRAM pvland_offline_main
   INTEGER :: ntot                           ! Actual number of forcing rows
 
   REAL, PARAMETER :: pi = 3.14159265359
-  REAL, PARAMETER :: dt_forcing = 1800.     ! Forcing interval (s)
 
-  ! ====== Site parameters (natural surface, soil, initial state) ======
-  ! The PV park geometry and optical properties are set in INIT_PVLAND
-  ! (core/pvland.f90), as in ARPS.
-  REAL, PARAMETER :: z0_nat     = 0.073     ! Natural surface roughness (m) -> roufns
-  REAL, PARAMETER :: veg_site   = 0.95      ! Vegetation fraction
-  INTEGER, PARAMETER :: vegtyp_site  = 3
-  REAL, PARAMETER :: lai_site   = 2.
-  INTEGER, PARAMETER :: soiltyp_site = 1
-  REAL, PARAMETER :: tdeep_ini  = 20.7 + 273.15    ! Initial deep soil temperature (K)
-  REAL, PARAMETER :: wetsfc_ini = 0.125     ! Initial surface soil moisture (m3/m3)
-  REAL, PARAMETER :: wetdp_ini  = 0.115     ! Initial deep soil moisture (m3/m3)
+  ! ====== Site and run parameters: namelist &offline_site (pvland.nml) ======
+  ! dtsfc, styp, vtyp, lai0, roufns0, veg0 are the ARPS variables of
+  ! globcst.inc (in ARPS: &soil_ebm of arps.input). The PV park parameters
+  ! are in &pvland (module pvland_nml), as in ARPS. Defaults below.
+  CHARACTER(LEN=256) :: forcing_file = 'recorded_data_2025.csv'  ! Forcing CSV file (1st command-line argument overrides it)
+  REAL :: dt_forcing     = 1800.    ! Time interval between two rows of the forcing file (s)
+  REAL :: tsoil_sfc_ini  = -999.    ! Initial surface soil temperature (C); < -100: air temperature of the first forcing row
+  REAL :: tsoil_deep_ini = 20.7     ! Initial deep soil temperature (C)
+  REAL :: qsoil_sfc_ini  = 0.125    ! Initial surface soil moisture (m3/m3)
+  REAL :: qsoil_deep_ini = 0.115    ! Initial deep soil moisture (m3/m3)
+  REAL :: wetcanp_ini    = 0.       ! Initial canopy water amount (m)
+  NAMELIST /offline_site/ forcing_file, dt_forcing, dtsfc,              &
+           styp, vtyp, lai0, roufns0, veg0,                             &
+           tsoil_sfc_ini, tsoil_deep_ini, qsoil_sfc_ini, qsoil_deep_ini, &
+           wetcanp_ini
 
   ! ====== File I/O ======
   INTEGER :: temp, ios, t, it, k
   REAL :: frac
   CHARACTER(LEN=500) :: line
-  CHARACTER(LEN=256) :: forcing_file    ! forcing CSV (1st command-line argument)
   INTEGER :: nstep_frc                  ! number of PV-LAND steps (dtsfc) per forcing interval
   CHARACTER(LEN=256) :: nml_file        ! PV-LAND namelist file (2nd command-line argument)
 
@@ -126,8 +131,42 @@ PROGRAM pvland_offline_main
   WRITE(*,*) '========================================='
   WRITE(*,*) ''
 
+  ! Defaults of the ARPS site variables (globcst.inc) read in &offline_site
+  dtsfc   = 2.       ! PV-LAND time step (s)
+  styp    = 1        ! Soil type (soilcst.inc)
+  vtyp    = 3        ! Vegetation type (soilcst.inc)
+  lai0    = 2.       ! Leaf area index
+  roufns0 = 0.073    ! Roughness length of the natural surface (m)
+  veg0    = 0.95     ! Vegetation fraction
+
+  !---------------------------------------------------------------------
+  ! Parameters: namelists &pvland and &offline_site (pvland.nml)
+  !---------------------------------------------------------------------
+  nml_file = 'pvland.nml'
+  IF (COMMAND_ARGUMENT_COUNT() >= 2) CALL GET_COMMAND_ARGUMENT(2, nml_file)
+  OPEN(UNIT=11, FILE=TRIM(nml_file), STATUS='old', IOSTAT=ios)
+  IF (ios /= 0) THEN
+    WRITE(*,*) 'ERROR: parameter file not found: ', TRIM(nml_file)
+    STOP 1
+  END IF
+  READ(11, NML=pvland, IOSTAT=ios)
+  IF (ios /= 0) THEN
+    WRITE(*,*) 'ERROR reading namelist &pvland in ', TRIM(nml_file), ' (iostat =', ios, ')'
+    STOP 1
+  END IF
+  REWIND(11)
+  READ(11, NML=offline_site, IOSTAT=ios)
+  IF (ios /= 0) THEN
+    WRITE(*,*) 'ERROR reading namelist &offline_site in ', TRIM(nml_file), ' (iostat =', ios, ')'
+    STOP 1
+  END IF
+  CLOSE(11)
+  IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, forcing_file)
+  WRITE(*,*) 'Parameters read from ', TRIM(nml_file), ':'
+  WRITE(*,NML=pvland)
+  WRITE(*,NML=offline_site)
+
   ! ARPS control parameters used by the PV-LAND code
-  dtsfc       = 2.
   nstep_frc   = NINT(dt_forcing/dtsfc)   ! PV-LAND steps per forcing interval
   nsfcst      = 1                         ! soil sub-steps per pvland_sfcphy call (ARPS: dtbig/dtsfc)
   moist       = 1
@@ -137,20 +176,17 @@ PROGRAM pvland_offline_main
   nstep       = 1
 
   ! Surface properties
-  veg(:,:)        = veg_site
-  vegtyp(:,:)     = vegtyp_site
-  lai(:,:)        = lai_site
-  soiltyp(:,:,:)  = soiltyp_site
+  veg(:,:)        = veg0
+  vegtyp(:,:)     = vtyp
+  lai(:,:)        = lai0
+  soiltyp(:,:,:)  = styp
   stypfrct(:,:,:) = 1.0
-  roufns(:,:)     = z0_nat
+  roufns(:,:)     = roufns0
   snowdpth(:,:)   = 0.
 
   !=====================================================================
   ! READ CSV INPUT
   !=====================================================================
-
-  forcing_file = 'recorded_data_2025.csv'
-  IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL GET_COMMAND_ARGUMENT(1, forcing_file)
 
   WRITE(*,*) 'Reading forcing data from CSV: ', TRIM(forcing_file)
 
@@ -192,11 +228,15 @@ PROGRAM pvland_offline_main
 
   CALL set_atmosphere(1, 1, 0.)
 
-  tsoil(:,:,1,:) = tref_input(1)       ! T_nat
-  tsoil(:,:,2,:) = tdeep_ini           ! T_soil
-  qsoil(:,:,1,:) = wetsfc_ini
-  qsoil(:,:,2,:) = wetdp_ini
-  wetcanp(:,:,:) = 0.
+  IF (tsoil_sfc_ini < -100.) THEN
+    tsoil(:,:,1,:) = tref_input(1)                ! T_nat: air temperature
+  ELSE
+    tsoil(:,:,1,:) = tsoil_sfc_ini + 273.15
+  END IF
+  tsoil(:,:,2,:) = tsoil_deep_ini + 273.15        ! T_soil
+  qsoil(:,:,1,:) = qsoil_sfc_ini
+  qsoil(:,:,2,:) = qsoil_deep_ini
+  wetcanp(:,:,:) = wetcanp_ini
   qvsfc(:,:,:)   = qvref_input(1)
 
   ! Arrays allocated by arps.f90 in ARPS
@@ -204,22 +244,6 @@ PROGRAM pvland_offline_main
   ALLOCATE(q_can(nx,ny), L_obk(nx,ny))   ! PV-LAND version 2 state (restart in ARPS)
   ALLOCATE(T_can(nx,ny), T_PVa(nx,ny))   ! PV-LAND air nodes (restart in ARPS)
 
-  ! PV-LAND parameters: namelist &pvland (same as in ARPS arps.input)
-  nml_file = 'pvland.nml'
-  IF (COMMAND_ARGUMENT_COUNT() >= 2) CALL GET_COMMAND_ARGUMENT(2, nml_file)
-  OPEN(UNIT=11, FILE=TRIM(nml_file), STATUS='old', IOSTAT=ios)
-  IF (ios /= 0) THEN
-    WRITE(*,*) 'ERROR: PV-LAND parameter file not found: ', TRIM(nml_file)
-    STOP 1
-  END IF
-  READ(11, NML=pvland, IOSTAT=ios)
-  IF (ios /= 0) THEN
-    WRITE(*,*) 'ERROR reading namelist &pvland in ', TRIM(nml_file), ' (iostat =', ios, ')'
-    STOP 1
-  END IF
-  CLOSE(11)
-  WRITE(*,*) 'PV-LAND parameters read from ', TRIM(nml_file), ':'
-  WRITE(*,NML=pvland)
 
   CALL init_pvland(nx,ny,nz,ptbar,ptprt,pbar,pprt,qvsfc(:,:,1),tsoil(:,:,1,1),tem1)
 
@@ -296,7 +320,8 @@ PROGRAM pvland_offline_main
            radsw,rnflx,radlwin,psfc,rhosfc,wdspsfc,0.0,0.0,             &
            cdm,cdh,cdq,usflx,vsflx,ptsflx,qvsflx,                       &
            pt1,tair,qvair,                                              &
-           1,S_diffuse_in,lambda_in,phi_in)
+           1,S_diffuse_in,lambda_in,phi_in,                            &
+           it == nstep_frc)   ! diagnostics at the last step of the interval (outputs)
     END DO
 
     !-------------------------------------------------------------------

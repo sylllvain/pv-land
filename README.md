@@ -99,5 +99,9 @@ Chaque paramètre y est décrit sur sa ligne :
   `pv_az_park`), rugosités, albédos et émissivités, longueurs d'interface,
   paramètres thermiques et électriques du module PV.
 
-Les paramètres du site (sol, végétation, état initial, `dtsfc`) restent en tête
-de `offline/pvland_offline_main.f90`.
+Les paramètres du site et du run offline sont dans une seconde namelist,
+`&offline_site`, à la fin de `pvland.nml` (non lue par ARPS) : fichier de
+forçage, pas de temps (`dt_forcing`, `dtsfc`), sol et végétation (`styp`,
+`vtyp`, `lai0`, `roufns0`, `veg0`, mêmes noms que dans `&soil_ebm` d'ARPS) et
+état initial du sol. Seule la grille (une colonne, `nx = ny = 2`, `nz = 3`)
+reste fixée dans `offline/pvland_offline_main.f90`.
