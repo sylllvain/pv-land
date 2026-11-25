@@ -318,8 +318,8 @@ MODULE pvland_nml
   ! ---- Options ----
   INTEGER :: vf_update_opt = 0      ! View factors, sky view factors, radiosity LU factors and tilt-derived geometry: 0 = computed once at initialisation (fixed panels), 1 = recomputed at every PV-LAND time step (moving panels)
 
-  ! ---- Location of the PV park (ARPS only; the offline column is always in the park) ----
-  INTEGER :: pv_park_opt = 0        ! 0 = PV park over the whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2
+  ! ---- Location of the PV park (offline: the single column is in the park or not) ----
+  INTEGER :: pv_park_opt = 0        ! 0 = PV park over the whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2, 2 = no PV park (natural ground only, as sfcphy = 4)
   INTEGER :: pv_park_i1 = 1         ! First global x index (scalar point) of the PV park (pv_park_opt = 1)
   INTEGER :: pv_park_i2 = 99999     ! Last global x index of the PV park, clipped to the domain (pv_park_opt = 1)
   INTEGER :: pv_park_j1 = 1         ! First global y index (scalar point) of the PV park (pv_park_opt = 1)

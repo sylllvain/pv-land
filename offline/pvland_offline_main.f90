@@ -23,7 +23,7 @@
 !  Usage:  ./pv_land.exe [forcing.csv [pvland.nml]]
 !          default forcing file: recorded_data_adjusted_daily_summer_2025.csv
 !          default PV-LAND parameter file: pvland.nml (namelist &pvland,
-!          the same as in ARPS arps.input; pv_park_* are not used offline)
+!          the same as in ARPS arps.input; pv_park_opt = 2: no PV panels)
 !
 !  Grid: nx = ny = 2 (ARPS loops run from 1 to nx-1, so a single
 !  column (1,1) is computed), nz = 3 (level 2 = reference level).
@@ -32,7 +32,7 @@
 
 PROGRAM pvland_offline_main
 
-  USE module_pvland_in,  ONLY : h_PV
+  USE module_pvland_in,  ONLY : h_PV, albedo_nat, emiss_nat
   USE module_pvland_out
   USE pvland_nml,        ONLY : pvland      ! namelist &pvland (PV park parameters)
   USE pvland_sfcphy_work, ONLY : uref_diag => uref,                    &
@@ -43,6 +43,7 @@ PROGRAM pvland_offline_main
 
   INCLUDE 'globcst.inc'
   INCLUDE 'phycst.inc'
+  INCLUDE 'sfcphycst.inc'
 
   ! ====== Grid parameters ======
   INTEGER, PARAMETER :: nx = 2, ny = 2, nz = 3
@@ -276,7 +277,14 @@ PROGRAM pvland_offline_main
       CALL set_atmosphere(temp, temp+1, frac)
       nstep = nstep + 1
 
-      wdspsfc(:,:) = SQRT(u(:,:,2)**2 + v(:,:,2)**2 + w(:,:,2)**2)
+      ! Outside the PV park (pv_park_opt = 2): inputs that ARPS provides to
+      ! the natural-ground scheme (sfcphy = 4)
+      !   - surface wind speed, as in sfcphysics
+      !   - net radiation of the ground, as the ARPS radiation scheme, with
+      !     the albedo and emissivity of the natural ground (&pvland)
+      wdspsfc(:,:) = MAX(vsfcmin, SQRT(u(:,:,2)**2 + v(:,:,2)**2 + w(:,:,2)**2))
+      rnflx(:,:)   = (1.0 - albedo_nat(:,:)) * radsw(:,:)                     &
+                   + emiss_nat(:,:) * (radlwin(:,:) - sbcst*tsoil(:,:,1,0)**4)
       CALL pvland_sfcphy(nx,ny,nz,nzsoil,nstyps,                       &
            u,v,w,ptprt,pprt,qv,ptbar,pbar,qvbar,zp,prcrate,            &
            soiltyp,stypfrct,vegtyp,lai,roufns,veg,                      &
@@ -372,7 +380,6 @@ CONTAINS
     rhosfc(:,:)  = rhoref_input(k1) + (rhoref_input(k2) - rhoref_input(k1)) * frac
     radsw(:,:)   = swin_input(k1)   + (swin_input(k2)   - swin_input(k1))   * frac
     radlwin(:,:) = lwin_input(k1)   + (lwin_input(k2)   - lwin_input(k1))   * frac
-    rnflx(:,:)   = 0.               ! used outside the PV park only
     S_diffuse_in(:,:) = S_diffuse_input(k1) + (S_diffuse_input(k2) - S_diffuse_input(k1)) * frac
     lambda_in(:,:)    = lambda_input(k1)    + (lambda_input(k2)    - lambda_input(k1))    * frac
     phi_in(:,:)       = phi_input(k1)       + (phi_input(k2)       - phi_input(k1))       * frac

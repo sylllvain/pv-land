@@ -58,8 +58,11 @@ Chaque paramètre y est décrit sur sa ligne :
   z_can, z_PVa…) : `0` = une seule fois à l'initialisation (panneaux fixes),
   `1` = à chaque pas de temps (panneaux mobiles ; la loi de suivi β(t) reste
   à écrire) ;
-- `pv_park_opt`, `pv_park_i1..j2` : emplacement du parc sur la grille ARPS
-  (non utilisés en offline) ;
+- `pv_park_opt`, `pv_park_i1..j2` : emplacement du parc sur la grille ARPS.
+  En offline, `pv_park_opt = 2` fait tourner la colonne **sans panneaux**
+  (sol naturel seul, comme `sfcphy = 4` dans ARPS) : le rayonnement net du sol
+  est alors calculé avec `pv_albedo_nat` et `pv_emiss_nat`, et les colonnes
+  « panneaux » des sorties n'ont plus de sens ;
 - géométrie (`pv_L`, `pv_a`, `pv_beta_deg`, `pv_h_PV`, `pv_theta_0_deg`,
   `pv_az_park`), rugosités, albédos et émissivités, longueurs d'interface,
   paramètres thermiques et électriques du module PV.

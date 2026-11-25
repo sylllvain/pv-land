@@ -2,15 +2,16 @@
 ! The same namelist is read by ARPS (arps.input, sfcphy = 5).
 ! Each parameter is described on its line; a parameter left out keeps
 ! its default value (module pvland_nml in core/module_pvland.f90).
-! pv_park_opt and pv_park_i1..j2 (location of the park on the ARPS grid)
-! are not used offline: the single column is always in the PV park.
+! pv_park_opt: 0 = the column is in the PV park, 2 = no PV panels (natural
+! ground only, as ARPS sfcphy = 4); pv_park_i1..j2 locate the park on the
+! ARPS grid (offline, only column (1,1) is computed).
 !
 ! Usage: ./pv_land.exe [forcing.csv [pvland.nml]]
 
  &pvland
    vf_update_opt  = 0,       ! View factors, radiosity LU factors and tilt-derived geometry: 0 = computed once at initialisation (fixed panels), 1 = recomputed every PV-LAND step (moving panels)
 
-   pv_park_opt    = 0,       ! PV park location: 0 = whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2
+   pv_park_opt    = 0,       ! PV park location: 0 = whole domain, 1 = rectangle pv_park_i1:pv_park_i2 x pv_park_j1:pv_park_j2, 2 = no PV park (natural ground only, as sfcphy = 4)
      pv_park_i1   = 1,       ! First global x index (scalar point) of the PV park (pv_park_opt = 1)
      pv_park_i2   = 99999,   ! Last global x index of the PV park, clipped to the domain (pv_park_opt = 1)
      pv_park_j1   = 1,       ! First global y index (scalar point) of the PV park (pv_park_opt = 1)
