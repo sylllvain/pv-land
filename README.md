@@ -63,6 +63,19 @@ make run-short    # 5 premiers jours (recorded_data_2025_short_5days.csv, ~1 s)
 ./pv_land.exe pvland.nml mon_forcage.csv      # forçage remplaçant forcing_file de &offline_site
 ```
 
+**Compilation reproductible.** Par défaut (`-O2`), le compilateur peut
+réordonner les calculs flottants : c'est plus rapide, mais une simple
+réorganisation du code peut changer les résultats au dernier chiffre. Pour
+vérifier qu'une modification ne change pas la physique, compiler les deux
+versions en mode reproductible (`-fp-model source`, comme ARPS) et comparer
+leurs sorties octet par octet :
+
+```bash
+make repro                       # pv_land_source.exe (objets dans build_source/), ~20 % plus lent
+make run FPMODEL=source          # idem, puis lancement (toute cible accepte FPMODEL)
+cmp pv_land_output_2025.csv autre_version/pv_land_output_2025.csv
+```
+
 Sorties (mêmes noms et colonnes que PV_LAND_final, lues par `analysis/`) :
 `pv_land_output_2025.csv` (flux modélisés et mesurés, températures, L, q_can,
 z0/d du parc, u*…) et `pv_diag_energy_balance_2025.csv` (bilan d'énergie des

@@ -18,8 +18,9 @@ pdf/
 # Éditeur
 *.swp
 
-# Build directory (objects, .mod)
+# Build directories (objects, .mod)
 build/
+build_*/
 
 # Version 2: run outputs and the reference build of PV_LAND_final
 pv_land_output_2025.csv

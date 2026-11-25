@@ -14,6 +14,14 @@
 #                     ($(ARPS_DIR))
 #   make sync-arps    copy them again from ARPS
 #   make clean / rebuild
+#
+# Reproducible build (to compare two versions bit for bit):
+#   make repro                    build pv_land_source.exe (objects in build_source/)
+#   make run FPMODEL=source       same, and run it (any target accepts FPMODEL)
+# FPMODEL=source compiles with -fp-model source, as ARPS: floating-point
+# expressions are evaluated as written, so a pure code reorganisation gives
+# bit-identical outputs (about 20 % slower). The default build lets the
+# compiler reorder floating-point operations (faster, last-digit changes).
 
 # Compiler
 #FC = gfortran
@@ -27,6 +35,9 @@ FC = ifx
 # ifx : optimisé (meme precision que la version debug : REAL simple precision)
 FFLAGS = -O2 -traceback
 
+# Floating-point model: empty = compiler default (fast), source = reproducible
+FPMODEL ?=
+
 # Linker flags
 # ifx : LAPACK/BLAS fournis par Intel MKL (gfortran : -llapack -lblas)
 MKLROOT ?= /opt/intel/oneapi/mkl/latest
@@ -37,9 +48,16 @@ LDFLAGS = -L$(MKLROOT)/lib -Wl,-rpath,$(MKLROOT)/lib -Wl,-rpath,$(INTEL_LIB) -qm
 ARPS_DIR ?= ../arps5.3.4_PVLAND_v2
 PYTHON   ?= python3
 
-# Executable name and build directory (objects and .mod files)
+# Executable name and build directory (objects and .mod files); a
+# separate executable and build directory for each floating-point model
+ifeq ($(FPMODEL),)
 EXEC     = pv_land.exe
 BUILDDIR = build
+else
+FFLAGS  += -fp-model $(FPMODEL)
+EXEC     = pv_land_$(FPMODEL).exe
+BUILDDIR = build_$(FPMODEL)
+endif
 
 # Include files (ARPS common blocks)
 INCFLAGS = -Iarps_lib/include
@@ -93,9 +111,13 @@ $(filter-out $(BUILDDIR)/module_pvland.o,$(OBJECTS)): $(BUILDDIR)/module_pvland.
 # Include files: rebuild everything when they change
 $(OBJECTS): $(wildcard arps_lib/include/*.inc)
 
-# Clean build files
+# Reproducible build (-fp-model source)
+repro:
+	$(MAKE) FPMODEL=source
+
+# Clean build files (all floating-point models)
 clean:
-	rm -rf $(BUILDDIR) $(EXEC)
+	rm -rf build build_* pv_land.exe pv_land_*.exe
 
 rebuild: clean all
 
@@ -116,4 +138,4 @@ sync-arps:
 help:
 	@sed -n '1,/^$$/p' Makefile | sed -n '/^#/p'
 
-.PHONY: all clean rebuild run run-short check-arps sync-arps help
+.PHONY: all repro clean rebuild run run-short check-arps sync-arps help

@@ -35,6 +35,7 @@ make sync-arps    # copy from ARPS
 make rebuild
 ```
 
+- Reproducible build: `make repro` (or any target with `FPMODEL=source`) adds `-fp-model source`, as ARPS, building `pv_land_source.exe` in `build_source/`. Use it to check that a code change is neutral: compare the outputs of two versions both built this way (`cmp`); the default `-O2` build lets ifx reorder floating-point operations, so a pure refactoring may change the last digits.
 - Compiler `ifx`, `FFLAGS = -O2 -traceback` (debug line `-g -traceback -check bounds` kept commented). REAL is single precision, as in ARPS. gfortran flags are commented out; gfortran needs `MODFLAG = -J$(BUILDDIR)` and `-llapack -lblas`.
 - LAPACK (`SGESV`, radiosity solvers) comes from Intel MKL (`-qmkl=sequential`); the Makefile hardcodes `MKLROOT`/`INTEL_LIB` under `/opt/intel/oneapi/.../latest` with an rpath, since `setvars.sh` is often not sourced.
 - Compiler warnings about `cdm_PVb`/`cdm_PVf` (INTENT(OUT) not set in `DRAG_PVLAND`) and subnormal constants in `pvland_profil.f90` come from the ARPS code and are known.
